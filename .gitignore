@@ -1,0 +1,5 @@
+#Ignore setup.sh
+setup.sh
+
+#Ignore build directory
+BUILD/*
