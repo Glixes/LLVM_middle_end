@@ -1,5 +1,10 @@
 #Ignore setup.sh
 setup.sh
 
-#Ignore build directory
+#Ignore build, install, tmp directory
 BUILD/*
+INSTALL/*
+Tmp/*
+
+#Ignore vscode files
+.vscode/
