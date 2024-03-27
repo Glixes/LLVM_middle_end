@@ -64,20 +64,14 @@ bool runOnBasicBlock(BasicBlock &B) {
     if (!inst.isBinaryOp())
       continue;
 
-    for (auto Iter = inst.op_begin(); Iter != inst.op_end(); Iter++)
-    {
-      outs() << *Iter << "\n";
-    }
-
     std::pair<ConstantInt*, Value*> operands = getConstant(inst.getOperand(0), inst.getOperand(1));
     if (!operands.first)
       continue;
 
     // optimized instruction
-    Instruction * i = nullptr;
-    
-    if (Instruction *a = (algebraic_identity(operands.first, inst.getOpcode()) ? 
-          dyn_cast<Instruction> (operands.second) : nullptr))
+    Value *i = nullptr;
+  
+    if (Value *a = (algebraic_identity(operands.first, inst.getOpcode()) ? operands.second : nullptr))
     {
       i = a;
     }
@@ -89,7 +83,8 @@ bool runOnBasicBlock(BasicBlock &B) {
       // create a new instruction shl instruction
       i = BinaryOperator::Create(BinaryOperator::Shl, operands.second, shift);
       // isert the new shift instruction after the considered mul instruction
-      i->insertAfter(&inst);
+      Instruction *newinst = dyn_cast<Instruction>(i);
+      newinst->insertAfter(&inst);
     } 
     // replace the non-optimized instruction uses with the optimized ones
     if (i)
