@@ -7,83 +7,92 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Utils/LocalOpts.h"
-#include "llvm/IR/Instructions.h"
 #include "llvm/IR/InstrTypes.h"
-#include <llvm/IR/Constants.h>
+#include "llvm/IR/Instructions.h"
+// #include <llvm/IR/Constants.h>
 
 using namespace llvm;
 
-bool runOnBasicBlock(BasicBlock &B) 
+/** @brief Check a pair of values for one constant.
+* If both parameters are constants, it casts only the first one.
+*
+* @param val1 first value
+* @param val2 second value
+* @return a pair containing the constant and the value.
+*/
+std::pair<ConstantInt*, Value*> getConstant (Value *val1, Value *val2)
+{ 
+  ConstantInt *C1 = dyn_cast<ConstantInt>(val1);
+  ConstantInt *C2 = dyn_cast<ConstantInt>(val2);
+
+  if (C1)
+    return std::pair<ConstantInt*, Value*> (C1, val2);
+  else if (C2)
+    return std::pair<ConstantInt*, Value*> (C2, val1);
+
+  return std::pair<ConstantInt*, Value*> (nullptr, nullptr);
+}
+
+/** @brief Check for algebraic identity optimizations.
+ * 
+ * @param c constant operand
+ * @param op opcode
+ * @return true if it is an algebraic identity, false otherwise
+*/
+bool algebraic_identity (ConstantInt* c, unsigned int op)
 {
-  for (auto &inst : B)
+  switch (op)
+  {
+    case BinaryOperator::Mul:
+      if (c->isOne())
+        return true;
+      break;
+
+    case BinaryOperator::Add:
+      if (c->isZero())
+        return true;
+      break;
+  }
+
+  return false;
+}
+
+bool runOnBasicBlock(BasicBlock &B) {
+  for (auto &inst : B) 
   {
     // check on mul operations
-    if (inst.getOpcode() != BinaryOperator::Mul)
+    if (!inst.isBinaryOp())
       continue;
-    // get both operand
-    Value *fact1 = inst.getOperand(0);
-    Value *fact2 = inst.getOperand(1);
-    // check if one of the operands is a power of 2 constant
-    ConstantInt *C1 = dyn_cast<ConstantInt>(fact1);
-    ConstantInt *C2 = dyn_cast<ConstantInt>(fact2);
-    Instruction *NewShl = nullptr;
-    if (C1 && C1->getValue().isPowerOf2())
+
+    std::pair<ConstantInt*, Value*> operands = getConstant(inst.getOperand(0), inst.getOperand(1));
+    if (!operands.first)
+      continue;
+
+    // optimized instruction
+    Value *i = nullptr;
+  
+    if (Value *a = (algebraic_identity(operands.first, inst.getOpcode()) ? operands.second : nullptr))
+    {
+      i = a;
+    }
+    else if (inst.getOpcode() == BinaryOperator::Mul && operands.first->getValue().isPowerOf2()) 
     {
       // create shift constant
-      ConstantInt *shift = ConstantInt::get(C1->getType(), C1->getValue().logBase2());
+      ConstantInt *shift =
+          ConstantInt::get(operands.first->getType(), operands.first->getValue().logBase2());
       // create a new instruction shl instruction
-      NewShl = BinaryOperator::Create(BinaryOperator::Shl, fact2, shift);
-    }
-    else if (C2 && C2->getValue().isPowerOf2())
-    {
-      // create shift constant
-      ConstantInt *shift = ConstantInt::get(C2->getType(), C2->getValue().logBase2());
-      // create a new instruction shl instruction
-      NewShl = BinaryOperator::Create(BinaryOperator::Shl, fact1, shift);
-    }
-    else
-      continue;
-    // isert the new shift instruction after the considered mul instruction
-    NewShl->insertAfter(&inst);
-    // replace every the mul instruction use with a shift instruction use
-    inst.replaceAllUsesWith(NewShl);
+      i = BinaryOperator::Create(BinaryOperator::Shl, operands.second, shift);
+      // isert the new shift instruction after the considered mul instruction
+      Instruction *newinst = dyn_cast<Instruction>(i);
+      newinst->insertAfter(&inst);
+    } 
+    // replace the non-optimized instruction uses with the optimized ones
+    if (i)
+      inst.replaceAllUsesWith(i);
   }
 
   return true;
 }
-
-/*
-bool runOnBasicBlock(BasicBlock &B) 
-{
-  for (auto i = B.begin(); i != B.end(); i++)
-  {
-    Instruction &inst = *i;
-    if (inst.getOpcode() != BinaryOperator::Mul)
-      continue;
-
-    ConstantInt *C = dyn_cast<ConstantInt>(i->getOperand(1));
-    if (!C) 
-      continue;
-
-    const APInt value = C->getValue();
-    if (!value.isPowerOf2())
-      continue;
-
-    int factor = value.logBase2();
-
-    LLVMContext &context = i->getParent()->getContext();
-    Value *shift_val = ConstantInt::get(llvm::Type::getInt32Ty(context), factor);
-
-    Instruction *NewInst = BinaryOperator::Create(BinaryOperator::Shl, i->getOperand(0), shift_val);
-
-    NewInst->insertAfter(&inst);
-    inst.replaceAllUsesWith(NewInst);
-  }
-
-
-  return true;
-  }
-*/
 
 bool runOnFunction(Function &F) {
   bool Transformed = false;
@@ -97,13 +106,10 @@ bool runOnFunction(Function &F) {
   return Transformed;
 }
 
-
-PreservedAnalyses LocalOpts::run(Module &M,
-                                      ModuleAnalysisManager &AM) {
+PreservedAnalyses LocalOpts::run(Module &M, ModuleAnalysisManager &AM) {
   for (auto Fiter = M.begin(); Fiter != M.end(); ++Fiter)
     if (runOnFunction(*Fiter))
       return PreservedAnalyses::none();
-  
+
   return PreservedAnalyses::all();
 }
-
