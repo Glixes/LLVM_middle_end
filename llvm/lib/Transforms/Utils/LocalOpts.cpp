@@ -21,7 +21,7 @@ using namespace llvm;
 * @return a pair containing the constant and the value.
 */
 std::pair<ConstantInt*, Value*> getConstant (Value *val1, Value *val2)
-{
+{ 
   ConstantInt *C1 = dyn_cast<ConstantInt>(val1);
   ConstantInt *C2 = dyn_cast<ConstantInt>(val2);
 
@@ -52,11 +52,9 @@ bool algebraic_identity (ConstantInt* c, unsigned int op)
       if (c->isZero())
         return true;
       break;
-
-    default:
-      return false;
-      break;
   }
+
+  return false;
 }
 
 bool runOnBasicBlock(BasicBlock &B) {
@@ -65,6 +63,11 @@ bool runOnBasicBlock(BasicBlock &B) {
     // check on mul operations
     if (!inst.isBinaryOp())
       continue;
+
+    for (auto Iter = inst.op_begin(); Iter != inst.op_end(); Iter++)
+    {
+      outs() << *Iter << "\n";
+    }
 
     std::pair<ConstantInt*, Value*> operands = getConstant(inst.getOperand(0), inst.getOperand(1));
     if (!operands.first)
@@ -78,7 +81,7 @@ bool runOnBasicBlock(BasicBlock &B) {
     {
       i = a;
     }
-    else if (operands.first->getValue().isPowerOf2()) 
+    else if (inst.getOpcode() == BinaryOperator::Mul && operands.first->getValue().isPowerOf2()) 
     {
       // create shift constant
       ConstantInt *shift =
