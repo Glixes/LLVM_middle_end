@@ -1,2 +1,5 @@
 # DS_Store file
 .DS_Store
+
+# VSCode files
+.vscode/
