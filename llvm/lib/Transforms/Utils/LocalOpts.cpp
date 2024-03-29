@@ -13,9 +13,9 @@
 
 using namespace llvm;
 
-Operation::Operation(Instruction &inst) : inst(&inst), register1(inst.getOperand(0)), 
-  register2(inst.getOperand(1)), C1(dyn_cast<ConstantInt>(register1)), C2(dyn_cast<ConstantInt>(register1)),
-  op(inst.getOpcode()) {};
+Operation::Operation(Instruction &inst) : register1(inst.getOperand(0)), register2(inst.getOperand(1)), 
+  inst(&inst), C1(dyn_cast<ConstantInt>(register1)), C2(dyn_cast<ConstantInt>(register2)), 
+  op(inst.getOpcode()) {}
 
 size_t Operation::getNConstants ()
 {
@@ -41,21 +41,6 @@ ConstantInt* Operation::getFirstConstantInt ()
   return (C1) ? C1 : C2;
 }
 
-/** @brief Create a pair containing conversions of the operands to ConstantInt.
-* In case one operand is not a constant, it will be converted to nullptr.
-*
-* @param val1 first value
-* @param val2 second value
-* @return a pair containing ConstantsInt objects.
-std::pair<ConstantInt*, ConstantInt*> getConstantInt (Value *val1, Value *val2)
-{ 
-  ConstantInt *C1 = dyn_cast<ConstantInt>(val1);
-  ConstantInt *C2 = dyn_cast<ConstantInt>(val2);
-
-  return std::pair<ConstantInt*, ConstantInt*> (C1, C2);
-}
-*/
-
 /** @brief Check for algebraic identity and in positive cases, return the instruction to replace.
  * 
  * @param operands ConstantInt operands
@@ -70,6 +55,7 @@ Value* getAlgebraicIdentity (Operation *o)
     case BinaryOperator::Add:
       if (o->C1 && o->C1->isZero())
         C = o->C1;
+        LLVM_FALLTHROUGH;
     case BinaryOperator::Sub:
       if (o->C2 && o->C2->isZero())
         C = o->C2;
@@ -78,6 +64,7 @@ Value* getAlgebraicIdentity (Operation *o)
     case BinaryOperator::Mul:
       if (o->C1 && o->C1->isOne())
         C = o->C1;
+        LLVM_FALLTHROUGH;
     case BinaryOperator::UDiv:
     case BinaryOperator::SDiv:
       if (o->C2 && o->C2->isOne())
@@ -85,7 +72,7 @@ Value* getAlgebraicIdentity (Operation *o)
       break;
   }
 
-  return o->getOpposite(C);
+  return (C) ? o->getOpposite(C) : nullptr;
 }
 
 Instruction* getStrengthReduction (Operation *o)
@@ -99,52 +86,53 @@ Instruction* getStrengthReduction (Operation *o)
   switch (o->op)
   {
       case BinaryOperator::Mul:
-        Instruction* shli = BinaryOperator::Create(Instruction::Shl, o->getOpposite(C), shift);
+      {
+        Instruction *shli = BinaryOperator::Create(Instruction::Shl, o->getOpposite(C), shift);
         shli->insertAfter(o->inst);
-        unsigned int restVal = C->getValue().getSExtValue() - (2 << shiftVal);
+        outs() << "C = " << C->getValue().getSExtValue() << "\n";
+        unsigned int restVal = (2 << shiftVal) - C->getValue().getSExtValue();
         if (restVal == 0)
         {
           newinst = shli;
           break;
         }
         ConstantInt *rest = ConstantInt::get(C->getType(), restVal);
+        if (restVal > 1)
+        {
+          Instruction *muli = BinaryOperator::Create(BinaryOperator::Mul, o->getOpposite(C), rest);
+          muli->insertAfter(shli);
+          newinst = BinaryOperator::Create(BinaryOperator::Sub, shli, muli);
+          newinst->insertAfter(muli);
+          break;
+        }
         newinst = BinaryOperator::Create(BinaryOperator::Sub, shli, rest);
         newinst->insertAfter(shli);
         break;
+      }
 
       case BinaryOperator::UDiv:
       case BinaryOperator::SDiv:
+      {
         if (C != o->C2 && C->getValue().isPowerOf2())
           break;
         newinst = BinaryOperator::Create(Instruction::LShr, o->getOpposite(C), shift);
         newinst->insertAfter(o->inst);
         break;
+      }
   }
 
   return newinst;
 }
 
-/** @brief Check if the divisor is an integer constant and, it that case if it is a power of 2.
- * It implicitly check if the instruction is a division.
- * 
- * @param inst instruction to check
- * @return true if the divisor is a ConstantInt and a Power of 2, false otherwise.
-*/
-bool isDivisorPow2 (Instruction *inst)
+bool runOnBasicBlock(BasicBlock &B) 
 {
-  if (inst->getOpcode() != (BinaryOperator::UDiv || BinaryOperator::SDiv))
-    return false;
-
-  ConstantInt *d = dyn_cast<ConstantInt>(inst->getOperand(1));
-  return (d && d->getValue().isPowerOf2());
-}
-
-bool runOnBasicBlock(BasicBlock &B) {
   for (auto &inst : B) 
   {
     // check for binary operations
     if (!inst.isBinaryOp())
       continue;
+
+    outs() << "Sono la istruzione: " << inst << "\n";
 
     Operation *o = new Operation (inst);
     if (o->getNConstants() == 0)
@@ -155,9 +143,11 @@ bool runOnBasicBlock(BasicBlock &B) {
     * The Value type is necessary in order to include also the Argument objects (representig
     * function's arguments).
     */
+    outs() << "Sto provando l'algebraic identity\n";
     Value *i = getAlgebraicIdentity(o);
-    if (!i)
-      i = getStrengthReduction(o);
+    if (!i){
+      outs() << "Sto provando la strength reduction\n";
+      i = getStrengthReduction(o);}
 
     // replace the non-optimized instruction uses with the optimized ones
     if (i)
