@@ -13,13 +13,40 @@
 
 using namespace llvm;
 
+Operation::Operation(Instruction &inst) : inst(&inst), register1(inst.getOperand(0)), 
+  register2(inst.getOperand(1)), C1(dyn_cast<ConstantInt>(register1)), C2(dyn_cast<ConstantInt>(register1)),
+  op(inst.getOpcode()) {};
+
+size_t Operation::getNConstants ()
+{
+  size_t counter = 0;
+  if (C1)
+    counter++;
+  if (C2)
+    counter++;
+  return counter;
+}
+
+Value* Operation::getOpposite (ConstantInt *C)
+{
+  if (C == C1)
+    return register2;
+  else if (C == C2)
+    return register1;
+  return nullptr;
+}
+
+ConstantInt* Operation::getFirstConstantInt ()
+{
+  return (C1) ? C1 : C2;
+}
+
 /** @brief Create a pair containing conversions of the operands to ConstantInt.
 * In case one operand is not a constant, it will be converted to nullptr.
 *
 * @param val1 first value
 * @param val2 second value
 * @return a pair containing ConstantsInt objects.
-*/
 std::pair<ConstantInt*, ConstantInt*> getConstantInt (Value *val1, Value *val2)
 { 
   ConstantInt *C1 = dyn_cast<ConstantInt>(val1);
@@ -27,6 +54,7 @@ std::pair<ConstantInt*, ConstantInt*> getConstantInt (Value *val1, Value *val2)
 
   return std::pair<ConstantInt*, ConstantInt*> (C1, C2);
 }
+*/
 
 /** @brief Check for algebraic identity and in positive cases, return the instruction to replace.
  * 
@@ -34,75 +62,62 @@ std::pair<ConstantInt*, ConstantInt*> getConstantInt (Value *val1, Value *val2)
  * @param inst instruction examined
  * @return Value containing the intruction to replace, nullptr otherwise.
 */
-Value* getAlgebraicIdentity (std::pair<ConstantInt*, ConstantInt*> operands, Instruction &inst)
+Value* getAlgebraicIdentity (Operation *o)
 {
-  switch (inst.getOpcode())
+  ConstantInt* C = nullptr;
+  switch (o->op)
   {
     case BinaryOperator::Add:
-      if (operands.first && operands.first->isZero())
-        return inst.getOperand(1);
+      if (o->C1 && o->C1->isZero())
+        C = o->C1;
     case BinaryOperator::Sub:
-      if (operands.second && operands.second->isZero())
-        return inst.getOperand(0);
+      if (o->C2 && o->C2->isZero())
+        C = o->C2;
       break;
 
     case BinaryOperator::Mul:
-      if (operands.first && operands.first->isOne())
-        return inst.getOperand(1);
+      if (o->C1 && o->C1->isOne())
+        C = o->C1;
     case BinaryOperator::UDiv:
     case BinaryOperator::SDiv:
-      if (operands.second && operands.second->isOne())
-        return inst.getOperand(0);
+      if (o->C2 && o->C2->isOne())
+        C = o->C2;
       break;
   }
 
-  return nullptr;
+  return o->getOpposite(C);
 }
 
-Instruction* getStrengthReductionLeft (ConstantInt *C, Instruction &inst)
+Instruction* getStrengthReduction (Operation *o)
 {
-  unsigned int shiftVal = C->getValue().ceilLogBase2();
-  ConstantInt *shift = ConstantInt::get(C->getType(), shiftVal);
-
-  if (inst.getOpcode() != BinaryOperator::Mul)
-    return nullptr;
-
-  Value* shli = BinaryOperator::Create(Instruction::Shl, inst.getOperand(0), shift);
-  Instruction *newshli = dyn_cast<Instruction>(shli);
-  newshli->insertAfter(&inst);
-  unsigned int restVal = C->getValue().getSExtValue() - (2 << shiftVal);
-  ConstantInt *rest = ConstantInt::get(C->getType(), restVal);
-  Value* subi = BinaryOperator::Create(BinaryOperator::Sub, inst.getOperand(1), rest);
-  Instruction *newsubi = dyn_cast<Instruction>(subi);
-  newsubi->insertAfter(newshli);
-  return newsubi;
-}
-
-Instruction* getStrengthReductionRight (ConstantInt *C, Instruction &inst)
-{
+  ConstantInt *C = o->getFirstConstantInt();
+  // Negative constants are not handled
   unsigned int shiftVal = C->getValue().ceilLogBase2();
   ConstantInt *shift = ConstantInt::get(C->getType(), shiftVal);
 
   Instruction* newinst = nullptr;
-  switch (inst.getOpcode())
+  switch (o->op)
   {
       case BinaryOperator::Mul:
-        Value* shli = BinaryOperator::Create(Instruction::Shl, inst.getOperand(0), shift);
-        Instruction *newshli = dyn_cast<Instruction>(shli);
-        newshli->insertAfter(&inst);
+        Instruction* shli = BinaryOperator::Create(Instruction::Shl, o->getOpposite(C), shift);
+        shli->insertAfter(o->inst);
         unsigned int restVal = C->getValue().getSExtValue() - (2 << shiftVal);
+        if (restVal == 0)
+        {
+          newinst = shli;
+          break;
+        }
         ConstantInt *rest = ConstantInt::get(C->getType(), restVal);
-        Value* subi = BinaryOperator::Create(BinaryOperator::Sub, inst.getOperand(1), rest);
-        newinst = dyn_cast<Instruction>(subi);
-        newinst->insertAfter(newshli);
+        newinst = BinaryOperator::Create(BinaryOperator::Sub, shli, rest);
+        newinst->insertAfter(shli);
         break;
 
       case BinaryOperator::UDiv:
       case BinaryOperator::SDiv:
-        ConstantInt *shift =
-          ConstantInt::get(C->getType(), shiftVal);
-        newinst = BinaryOperator::Create(Instruction::LShr, inst.getOperand(0), shift);
-        newinst->insertAfter(newshli);
+        if (C != o->C2 && C->getValue().isPowerOf2())
+          break;
+        newinst = BinaryOperator::Create(Instruction::LShr, o->getOpposite(C), shift);
+        newinst->insertAfter(o->inst);
         break;
   }
 
@@ -131,34 +146,18 @@ bool runOnBasicBlock(BasicBlock &B) {
     if (!inst.isBinaryOp())
       continue;
 
-    std::pair<ConstantInt*, ConstantInt*> operands = getConstantInt(inst.getOperand(0), inst.getOperand(1));
-    if (!operands.first && !operands.second)
+    Operation *o = new Operation (inst);
+    if (o->getNConstants() == 0)
       continue;
+    // TO DO handle constant folding
 
     /* Optimized instruction.
     * The Value type is necessary in order to include also the Argument objects (representig
     * function's arguments).
     */
-    Value *i = getAlgebraicIdentity(operands, inst);
+    Value *i = getAlgebraicIdentity(o);
     if (!i)
-      i = getStrengthReductionLeft(operands.first, inst);
-    if (!i)
-      i = getStrengthReductionRight(operands.second, inst);
-
-      
-    /*
-    else if (inst.getOpcode() == BinaryOperator::Mul && operands.first->getValue().isPowerOf2()) 
-    {
-      // create shift constant
-      ConstantInt *shift =
-          ConstantInt::get(operands.first->getType(), operands.first->getValue().logBase2());
-      // create a new instruction shl instruction
-      i = BinaryOperator::Create(BinaryOperator::Shl, operands.second, shift);
-      // isert the new shift instruction after the considered mul instruction
-      Instruction *newinst = dyn_cast<Instruction>(i);
-      newinst->insertAfter(&inst);
-    } 
-    */
+      i = getStrengthReduction(o);
 
     // replace the non-optimized instruction uses with the optimized ones
     if (i)
