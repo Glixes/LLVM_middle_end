@@ -3,6 +3,7 @@
 
 #include "llvm/IR/PassManager.h"
 #include <llvm/IR/Constants.h>
+#include <unordered_set>
 
 namespace llvm {
 class LocalOpts : public PassInfoMixin<LocalOpts> {
@@ -16,14 +17,12 @@ public:
 */
 class Operation 
 {
-    private:
-        Value* register1;   // the left register
-        Value* register2;   // the right register
-        
     public: 
         Instruction *inst;  // the llvm instruction object
+        Value* register1;   // the left register
+        Value* register2;   // the right register
         ConstantInt *C1;    // the left register casted to constant integer, if possible
-        ConstantInt *C2;
+        ConstantInt *C2;    // the right register casted to constant integer, if possible
         unsigned int op;    // the operation code
 
         /** @brief Operation class constructor
@@ -52,6 +51,10 @@ class Operation
          * @return the first constant present, or the right constant; if also the right constant is absent, return nullptr
         */
         ConstantInt* getFirstConstantInt();
+
+        bool isOppositeOp(Operation *x);
+        bool hasVariableInCommon(Operation*x);
+
 };
 } // namespace llvm
 #endif // LLVM_TRANSFORMS_LOCALOPTS_H

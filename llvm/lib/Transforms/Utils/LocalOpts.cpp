@@ -13,9 +13,17 @@
 
 using namespace llvm;
 
-Operation::Operation(Instruction &inst) : register1(inst.getOperand(0)), register2(inst.getOperand(1)), 
-  inst(&inst), C1(dyn_cast<ConstantInt>(register1)), C2(dyn_cast<ConstantInt>(register2)), 
-  op(inst.getOpcode()) {}
+Operation::Operation(Instruction &inst) : inst(&inst)
+{
+  if (!inst.isBinaryOp())
+    throw std::invalid_argument("Non Binary Operation");
+
+  register1 = inst.getOperand(0);
+  register2 = inst.getOperand(1);
+  C1 = dyn_cast<ConstantInt>(register1);
+  C2 = dyn_cast<ConstantInt>(register2);
+  op = inst.getOpcode();
+}
 
 
 size_t Operation::getNConstants ()
@@ -40,6 +48,42 @@ Value* Operation::getOpposite (ConstantInt *C)
 ConstantInt* Operation::getFirstConstantInt ()
 {
   return (C1) ? C1 : C2;
+}
+
+bool Operation::isOppositeOp (Operation *x)
+{
+  switch (op)
+  {
+    case BinaryOperator::Add:
+      if (x->op == BinaryOperator::Sub) return true;
+      break;
+    
+    case BinaryOperator::Sub:
+      if (x->op == BinaryOperator::Add) return true;
+      break;
+
+    case BinaryOperator::Mul:
+      if (x->op == BinaryOperator::UDiv ||
+          x->op == BinaryOperator::SDiv) return true;
+      break;
+
+    case BinaryOperator::SDiv:
+      if (x->op == BinaryOperator::Mul) return true;
+      break;
+
+    case BinaryOperator::UDiv:
+      if (x->op == BinaryOperator::Mul) return true;
+      break;
+
+    case BinaryOperator::Shl:
+      if (x->op == BinaryOperator::LShr) return true;
+      break;
+
+    case BinaryOperator::LShr:
+      if (x->op == BinaryOperator::Shl) return true;
+      break;
+  }
+  return false;
 }
 
 /** @brief Compute constant folding optimization.
@@ -76,9 +120,11 @@ Instruction* getConstantFolding (Operation *o)
 
     case BinaryOperator::Shl:
       fact1<<=fact2;
+      break;
 
     case BinaryOperator::LShr:
       fact1.lshr(fact2);
+      break;
 
     default:
       return nullptr;
@@ -178,30 +224,45 @@ Instruction* getStrengthReduction (Operation *o)
   return newinst;
 }
 
+Instruction* getMultiInstructionOpt (Operation *o)
+{
+
+}
+
 bool runOnBasicBlock(BasicBlock &B) 
 {
+  std::unordered_map<ConstantInt*, std::vector<Operation*>> constantsLog;
   bool optimizedLastCycle = false;
   do 
   {
     optimizedLastCycle = false;
     for (auto &inst : B) 
     {
+      Operation *o = nullptr;
       // check for binary operations
-      if (!inst.isBinaryOp())
+      try
+      {
+        o = new Operation (inst);
+      }
+      catch (const std::invalid_argument &e)
+      {
         continue;
-
-      Operation *o = new Operation (inst);
+      }
+      
       size_t nConstants = o->getNConstants();
       if (nConstants == 0)
         continue;
+
+      if (o->C1) constantsLog[o->C1].push_back(o);
+      if (o->C2) constantsLog[o->C2].push_back(o);
 
       /* Optimized instruction.
       * The Value type is necessary in order to include also the Argument objects (representig
       * function's arguments).
       */
       Value *i = (nConstants == 2) ? getConstantFolding(o) : getAlgebraicIdentity(o);
-      if (!i)
-        i = getStrengthReduction(o);
+      if (!i) i = getMultiInstructionOpt(o);
+      if (!i) i = getStrengthReduction(o);
 
       // replace the non-optimized instruction uses with the optimized ones
       if (i)
