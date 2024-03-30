@@ -10,20 +10,47 @@ public:
     PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
 };
 
+/** @class describing a binary operation
+ * Provided accessibility to costant values in the operation
+ * and concepts like first constant present or opposite operation
+*/
 class Operation 
 {
     private:
-        Value* register1;
-        Value* register2;
+        Value* register1;   // the left register
+        Value* register2;   // the right register
         
     public: 
-        Instruction *inst;
-        ConstantInt *C1;
+        Instruction *inst;  // the llvm instruction object
+        ConstantInt *C1;    // the left register casted to constant integer, if possible
         ConstantInt *C2;
-        unsigned int op;
+        unsigned int op;    // the operation code
+
+        /** @brief Operation class constructor
+         * 
+         * @param inst is the instruction that represents the operation
+         * Builds an object of the class describes a binary operation
+         * Attributes C1 and C2 contain the result of the cast to integer constant, if the cast fails they contain nullptr
+        */
         Operation(Instruction &inst);
+
+        /** @brief Get the number of integer constants in the operation
+         * 
+         * @return integer number of constants
+        */
         size_t getNConstants();
+
+        /** @brief Get the SSA register in the opposite position of the specified constant integer, if present
+         * 
+         * @param C is the constant integer
+         * @return the register, or nullptr if the constant is not present
+        */
         Value* getOpposite(ConstantInt *C);
+
+        /** @brief Get the first integer constant starting from the left operand
+         * 
+         * @return the first constant present, or the right constant; if also the right constant is absent, return nullptr
+        */
         ConstantInt* getFirstConstantInt();
 };
 } // namespace llvm
