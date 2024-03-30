@@ -89,34 +89,35 @@ Instruction* getStrengthReduction (Operation *o)
       {
         Instruction *shli = BinaryOperator::Create(Instruction::Shl, o->getOpposite(C), shift);
         shli->insertAfter(o->inst);
-        outs() << "C = " << C->getValue().getSExtValue() << "\n";
-        unsigned int restVal = (2 << shiftVal) - C->getValue().getSExtValue();
+        unsigned int restVal = (1 << shiftVal) - C->getValue().getSExtValue();
+        ConstantInt *rest = ConstantInt::get(C->getType(), restVal);
         if (restVal == 0)
         {
           newinst = shli;
-          break;
         }
-        ConstantInt *rest = ConstantInt::get(C->getType(), restVal);
-        if (restVal > 1)
+        else if (restVal == 1)
+        {
+          newinst = BinaryOperator::Create(BinaryOperator::Sub, shli, o->getOpposite(C));
+          newinst->insertAfter(shli);
+        }
+        else if (restVal > 1)
         {
           Instruction *muli = BinaryOperator::Create(BinaryOperator::Mul, o->getOpposite(C), rest);
           muli->insertAfter(shli);
           newinst = BinaryOperator::Create(BinaryOperator::Sub, shli, muli);
           newinst->insertAfter(muli);
-          break;
         }
-        newinst = BinaryOperator::Create(BinaryOperator::Sub, shli, rest);
-        newinst->insertAfter(shli);
         break;
       }
 
       case BinaryOperator::UDiv:
       case BinaryOperator::SDiv:
       {
-        if (C != o->C2 && C->getValue().isPowerOf2())
-          break;
-        newinst = BinaryOperator::Create(Instruction::LShr, o->getOpposite(C), shift);
-        newinst->insertAfter(o->inst);
+        if (C == o->C2 && C->getValue().isPowerOf2())
+        {
+          newinst = BinaryOperator::Create(Instruction::LShr, o->getOpposite(C), shift);
+          newinst->insertAfter(o->inst);
+        }
         break;
       }
   }
@@ -132,8 +133,6 @@ bool runOnBasicBlock(BasicBlock &B)
     if (!inst.isBinaryOp())
       continue;
 
-    outs() << "Sono la istruzione: " << inst << "\n";
-
     Operation *o = new Operation (inst);
     if (o->getNConstants() == 0)
       continue;
@@ -143,10 +142,8 @@ bool runOnBasicBlock(BasicBlock &B)
     * The Value type is necessary in order to include also the Argument objects (representig
     * function's arguments).
     */
-    outs() << "Sto provando l'algebraic identity\n";
     Value *i = getAlgebraicIdentity(o);
     if (!i){
-      outs() << "Sto provando la strength reduction\n";
       i = getStrengthReduction(o);}
 
     // replace the non-optimized instruction uses with the optimized ones
