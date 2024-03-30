@@ -41,6 +41,52 @@ ConstantInt* Operation::getFirstConstantInt ()
   return (C1) ? C1 : C2;
 }
 
+/** @brief Compute constant folding optimization.
+ * 
+ * @param o operation examined
+ * @return Add instruction containing the result as first operand, and 0 as second operand.
+*/
+Instruction* getConstantFolding (Operation *o)
+{
+  APInt fact1 = o->C1->getValue();
+  APInt fact2 = o->C2->getValue();
+
+  switch (o->op)
+  {
+    case BinaryOperator::Add:
+      fact1 += fact2;
+      break;
+    
+    case BinaryOperator::Sub:
+      fact1 -= fact2;
+      break;
+
+    case BinaryOperator::Mul:
+      fact1 *= fact2;
+      break;
+
+    case BinaryOperator::SDiv:
+      fact1.udiv(fact2);
+      break;
+
+    case BinaryOperator::UDiv:
+      fact1.udiv(fact2);
+      break;
+
+    case BinaryOperator::Shl:
+      fact1<<=fact2;
+
+    case BinaryOperator::LShr:
+      fact1.lshr(fact2);
+
+    default:
+      return nullptr;
+  }
+
+  ConstantInt *result = ConstantInt::get(o->C1->getType(), fact1.getSExtValue());
+  return BinaryOperator::Create(Instruction::Shl, result, 0);
+}
+
 /** @brief Check for algebraic identity and in positive cases, return the instruction to replace.
  * 
  * @param operands ConstantInt operands
@@ -121,35 +167,43 @@ Instruction* getStrengthReduction (Operation *o)
         break;
       }
   }
-
   return newinst;
 }
 
 bool runOnBasicBlock(BasicBlock &B) 
 {
-  for (auto &inst : B) 
+  bool optimizedLastCycle = false;
+  do 
   {
-    // check for binary operations
-    if (!inst.isBinaryOp())
-      continue;
+    optimizedLastCycle = false;
+    for (auto &inst : B) 
+    {
+      // check for binary operations
+      if (!inst.isBinaryOp())
+        continue;
 
-    Operation *o = new Operation (inst);
-    if (o->getNConstants() == 0)
-      continue;
-    // TO DO handle constant folding
+      Operation *o = new Operation (inst);
+      size_t nConstants = o->getNConstants();
+      if (nConstants == 0)
+        continue;
 
-    /* Optimized instruction.
-    * The Value type is necessary in order to include also the Argument objects (representig
-    * function's arguments).
-    */
-    Value *i = getAlgebraicIdentity(o);
-    if (!i){
-      i = getStrengthReduction(o);}
+      /* Optimized instruction.
+      * The Value type is necessary in order to include also the Argument objects (representig
+      * function's arguments).
+      */
+      Value *i = (nConstants == 2) ? getConstantFolding(o) : getAlgebraicIdentity(o);
+      if (!i)
+        i = getStrengthReduction(o);
 
-    // replace the non-optimized instruction uses with the optimized ones
-    if (i)
-      inst.replaceAllUsesWith(i);
+      // replace the non-optimized instruction uses with the optimized ones
+      if (i)
+      {
+        inst.replaceAllUsesWith(i);
+        optimizedLastCycle = true;
+      }
+    }
   }
+  while (optimizedLastCycle && false);
 
   return true;
 }
