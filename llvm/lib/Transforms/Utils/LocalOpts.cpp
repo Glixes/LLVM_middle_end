@@ -17,6 +17,7 @@ Operation::Operation(Instruction &inst) : register1(inst.getOperand(0)), registe
   inst(&inst), C1(dyn_cast<ConstantInt>(register1)), C2(dyn_cast<ConstantInt>(register2)), 
   op(inst.getOpcode()) {}
 
+
 size_t Operation::getNConstants ()
 {
   size_t counter = 0;
@@ -41,11 +42,10 @@ ConstantInt* Operation::getFirstConstantInt ()
   return (C1) ? C1 : C2;
 }
 
-/** @brief Check for algebraic identity and in positive cases, return the instruction to replace.
+/** @brief Check the operation for algebraic identity and, in positive cases, return the instruction to replace
  * 
- * @param operands ConstantInt operands
- * @param inst instruction examined
- * @return Value containing the intruction to replace, nullptr otherwise.
+ * @param o operation examined
+ * @return Value containing the intruction to replace, nullptr otherwise
 */
 Value* getAlgebraicIdentity (Operation *o)
 {
@@ -75,6 +75,13 @@ Value* getAlgebraicIdentity (Operation *o)
   return (C) ? o->getOpposite(C) : nullptr;
 }
 
+/** @brief Check the operation for strength reduction optimiziations
+ * In case of multiplication and in case of divisions where the constant is a power of two,
+ * a shift is inserted, followed by eventual needed multiplications (to be optimized in the following stages) and subctrations
+ * 
+ * @param o operation examined
+ * @return the last instruction inserted, nullptr otherwise
+*/
 Instruction* getStrengthReduction (Operation *o)
 {
   ConstantInt *C = o->getFirstConstantInt();
@@ -100,6 +107,7 @@ Instruction* getStrengthReduction (Operation *o)
           newinst = BinaryOperator::Create(BinaryOperator::Sub, shli, o->getOpposite(C));
           newinst->insertAfter(shli);
         }
+        // if rest is > 1 an intemermediate multiplication is needed
         else if (restVal > 1)
         {
           Instruction *muli = BinaryOperator::Create(BinaryOperator::Mul, o->getOpposite(C), rest);
