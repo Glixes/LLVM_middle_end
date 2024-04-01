@@ -6,23 +6,17 @@
 //
 //===----------------------------------------------------------------------===//
 
+#define DEBUG
+
 #include "llvm/Transforms/Utils/LocalOpts.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instructions.h"
 
 using namespace llvm;
 
-Operation::Operation(Instruction &inst) : inst(&inst)
-{
-  if (!inst.isBinaryOp())
-    throw std::invalid_argument("Non Binary Operation");
-
-  register1 = inst.getOperand(0);
-  register2 = inst.getOperand(1);
-  C1 = dyn_cast<ConstantInt>(register1);
-  C2 = dyn_cast<ConstantInt>(register2);
-  op = inst.getOpcode();
-}
+Operation::Operation(Instruction &inst) : inst(&inst), register1(inst.getOperand(0)),
+register2(inst.getOperand(1)), C1(dyn_cast<ConstantInt>(register1)),C2(dyn_cast<ConstantInt>(register2)), 
+op(inst.getOpcode()) {}
 
 
 size_t Operation::getNConstants ()
@@ -89,10 +83,8 @@ Instruction* Operation::getRegThatIsResult (Operation *o)
 {
   Value *res = nullptr;
 
-  if (o->inst == register1)
-    res = register1;
-  else if (o->inst == register2)
-    res = register2;
+  if (inst == o->register1 || inst == o->register2)
+    res = getOpposite(getFirstConstantInt());
 
   return dyn_cast_if_present<Instruction> (res);
 }
@@ -104,6 +96,7 @@ bool Operation::isValidForOpt()
     return false;
   if (op == BinaryOperator::Sub || op == BinaryOperator::SDiv || op == BinaryOperator::UDiv)
     return (!C1? true : false);
+  return false;
 }
 
 /** @brief Compute constant folding optimization.
@@ -131,19 +124,19 @@ Instruction* getConstantFolding (Operation *o)
       break;
 
     case BinaryOperator::SDiv:
-      fact1.udiv(fact2);
+      fact1 = fact1.udiv(fact2);
       break;
 
     case BinaryOperator::UDiv:
-      fact1.udiv(fact2);
+      fact1 = fact1.udiv(fact2);
       break;
 
     case BinaryOperator::Shl:
-      fact1<<=fact2;
+      fact1 = fact1<<=fact2;
       break;
 
     case BinaryOperator::LShr:
-      fact1.lshr(fact2);
+      fact1 = fact1.lshr(fact2);
       break;
 
     default:
@@ -151,7 +144,10 @@ Instruction* getConstantFolding (Operation *o)
   }
 
   ConstantInt *result = ConstantInt::get(o->C1->getType(), fact1.getSExtValue());
-  return BinaryOperator::Create(Instruction::Shl, result, 0);
+  ConstantInt *zero = ConstantInt::get(o->C1->getType(), 0);
+  Instruction *addi = BinaryOperator::Create(Instruction::Add, result, zero);
+  addi->insertAfter(o->inst);
+  return addi;
 }
 
 /** @brief Check the operation for algebraic identity and, in positive cases, return the instruction to replace
@@ -169,6 +165,8 @@ Value* getAlgebraicIdentity (Operation *o)
         C = o->C1;
         LLVM_FALLTHROUGH;
     case BinaryOperator::Sub:
+    case BinaryOperator::Shl:
+    case BinaryOperator::LShr:
       if (o->C2 && o->C2->isZero())
         C = o->C2;
       break;
@@ -272,22 +270,20 @@ bool runOnBasicBlock(BasicBlock &B)
 {
   std::unordered_map<ConstantInt*, std::vector<Operation*>> constantsLog;
   bool optimizedLastCycle = false;
-  
+
   do 
   {
     optimizedLastCycle = false;
     for (auto &inst : B) 
     {
-      Operation *o = nullptr;
       // check for binary operations
-      try
-      {
-        o = new Operation (inst);
-      }
-      catch (const std::invalid_argument &e)
-      {
+      if (!inst.isBinaryOp())
         continue;
-      }
+      Operation *o = new Operation (inst);
+
+      #ifdef  DEBUG
+      outs() << "Instruction: " << inst << "\n";
+      #endif
       
       size_t nConstants = o->getNConstants();
       if (nConstants == 0)
@@ -300,9 +296,35 @@ bool runOnBasicBlock(BasicBlock &B)
       * The Value type is necessary in order to include also the Argument objects (representig
       * function's arguments).
       */
-      Value *i = (nConstants == 2) ? getConstantFolding(o) : getAlgebraicIdentity(o);
-      if (!i) i = getMultiInstructionOpt(o, constantsLog);
-      if (!i) i = getStrengthReduction(o);
+      #ifdef  DEBUG
+      outs() << "Trying to do AlgebriaicIdentity\n";
+      #endif
+      Value *i = getAlgebraicIdentity(o);
+      // handle infinite loop
+      //if (!i && nConstants == 2) i = getConstantFolding(o);
+      if (!i && nConstants == 2)
+      {
+        #ifdef  DEBUG
+        outs() << "Trying to do ConstantFolding\n";
+        #endif
+        i = getConstantFolding(o);
+      }
+      //if (!i) i = getMultiInstructionOpt(o, constantsLog);
+      if (!i)
+      {
+        #ifdef  DEBUG
+        outs() << "Trying to do Multi Instruction\n";
+        #endif
+        i = getMultiInstructionOpt(o, constantsLog);
+      }
+      //if (!i) i = getStrengthReduction(o);
+      if (!i)
+      {
+        #ifdef  DEBUG
+        outs() << "Trying to do Strength Reduction\n";
+        #endif
+        i = getStrengthReduction(o);
+      }
 
       // replace the non-optimized instruction uses with the optimized ones
       if (i)
