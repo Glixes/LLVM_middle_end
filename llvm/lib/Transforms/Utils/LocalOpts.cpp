@@ -9,7 +9,6 @@
 #include "llvm/Transforms/Utils/LocalOpts.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instructions.h"
-// #include <llvm/IR/Constants.h>
 
 using namespace llvm;
 
@@ -84,6 +83,27 @@ bool Operation::isOppositeOp (Operation *x)
       break;
   }
   return false;
+}
+
+Instruction* Operation::getRegThatIsResult (Operation *o)
+{
+  Value *res = nullptr;
+
+  if (o->inst == register1)
+    res = register1;
+  else if (o->inst == register2)
+    res = register2;
+
+  return dyn_cast_if_present<Instruction> (res);
+}
+
+bool Operation::isValidForOpt()
+{
+  unsigned n_const = Operation::getNConstants();
+  if (n_const < 1)
+    return false;
+  if (op == BinaryOperator::Sub || op == BinaryOperator::SDiv || op == BinaryOperator::UDiv)
+    return (!C1? true : false);
 }
 
 /** @brief Compute constant folding optimization.
@@ -224,15 +244,35 @@ Instruction* getStrengthReduction (Operation *o)
   return newinst;
 }
 
-Instruction* getMultiInstructionOpt (Operation *o)
+/** @brief Apply Multi Instruction Optimization if possible.
+ * 
+ * @param o2 operation examined
+ * @param constantsLog hash map containing 
+*/
+Instruction* getMultiInstructionOpt (Operation *o2, std::unordered_map<ConstantInt*, std::vector<Operation*>> &constantsLog)
 {
+  ConstantInt *C = o2->getFirstConstantInt();
+  if (!o2->isValidForOpt())
+    return nullptr;
 
+  for (Operation *o1 : constantsLog[C])
+  {
+    if (!o1->isValidForOpt())
+      continue;
+    
+    if (o2->isOppositeOp(o1))
+    {
+      return o1->getRegThatIsResult(o2);
+    }
+  }
+  return nullptr;
 }
 
 bool runOnBasicBlock(BasicBlock &B) 
 {
   std::unordered_map<ConstantInt*, std::vector<Operation*>> constantsLog;
   bool optimizedLastCycle = false;
+  
   do 
   {
     optimizedLastCycle = false;
@@ -261,7 +301,7 @@ bool runOnBasicBlock(BasicBlock &B)
       * function's arguments).
       */
       Value *i = (nConstants == 2) ? getConstantFolding(o) : getAlgebraicIdentity(o);
-      if (!i) i = getMultiInstructionOpt(o);
+      if (!i) i = getMultiInstructionOpt(o, constantsLog);
       if (!i) i = getStrengthReduction(o);
 
       // replace the non-optimized instruction uses with the optimized ones
@@ -274,6 +314,7 @@ bool runOnBasicBlock(BasicBlock &B)
   }
   while (optimizedLastCycle && false);
 
+  constantsLog.clear();
   return true;
 }
 
