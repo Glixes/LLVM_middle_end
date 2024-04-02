@@ -54,10 +54,12 @@ namespace llvm
             ConstantInt* getFirstConstantInt();
 
             bool isOppositeOp(Operation *x);
-            Instruction* getRegThatIsResult(Operation *x);
+            bool hasSameConstant(Operation *x);
 
             /** @brief Determine if the operation is valid for local optmizations
-             * Operations need to have at least a constant and in case of subtractions and divisions it must be as second operand
+             * Operations need to have at least a constant and in case of subtractions and divisions it must be as second operand.
+             * In case there are two constants it returns true, because it is possible to apply constant folding.
+             * If the examined operation is a shift operation, it is not optimizable any further.
              * 
              * @return true or false
             */

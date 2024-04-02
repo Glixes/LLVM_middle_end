@@ -79,23 +79,40 @@ bool Operation::isOppositeOp (Operation *x)
   return false;
 }
 
-Instruction* Operation::getRegThatIsResult (Operation *o)
-{
-  Value *res = nullptr;
-
-  if (inst == o->register1 || inst == o->register2)
-    res = getOpposite(getFirstConstantInt());
-
-  return dyn_cast_if_present<Instruction> (res);
-}
-
 bool Operation::isValidForOpt()
 {
   unsigned n_const = Operation::getNConstants();
-  if (n_const < 1)
+  if (n_const < 1 || op == BinaryOperator::Shl || op == BinaryOperator::LShr)
     return false;
-  if (op == BinaryOperator::Sub || op == BinaryOperator::SDiv || op == BinaryOperator::UDiv)
+  if (n_const == 1 && (op == BinaryOperator::Sub || op == BinaryOperator::SDiv || op == BinaryOperator::UDiv))
     return (!C1? true : false);
+  return true;
+}
+
+bool Operation::hasSameConstant(Operation *x)
+{
+  if (C1)
+  {
+    if (x->C1 && C1->getValue() == x->C1->getValue())
+    {
+      return true;
+    }
+    else if (x->C2 && C1->getValue() == x->C2->getValue())
+    {
+      return true;
+    }
+  }
+  else if (C2)
+  {
+    if (x->C1 && C2->getValue() == x->C1->getValue())
+    {
+      return true;
+    }
+    else if (x->C2 && C2->getValue() == x->C2->getValue())
+    {
+      return true;
+    }
+  }
   return false;
 }
 
@@ -104,7 +121,7 @@ bool Operation::isValidForOpt()
  * @param o operation examined
  * @return Add instruction containing the result as first operand, and 0 as second operand.
 */
-Instruction* getConstantFolding (Operation *o)
+bool getConstantFolding (Operation *o)
 {
   APInt fact1 = o->C1->getValue();
   APInt fact2 = o->C2->getValue();
@@ -112,6 +129,8 @@ Instruction* getConstantFolding (Operation *o)
   switch (o->op)
   {
     case BinaryOperator::Add:
+      if (o->C1->isZero() || o->C2->isZero())
+        return false;
       fact1 += fact2;
       break;
     
@@ -131,23 +150,17 @@ Instruction* getConstantFolding (Operation *o)
       fact1 = fact1.udiv(fact2);
       break;
 
-    case BinaryOperator::Shl:
-      fact1 = fact1<<=fact2;
-      break;
-
-    case BinaryOperator::LShr:
-      fact1 = fact1.lshr(fact2);
-      break;
-
     default:
-      return nullptr;
+      return false;
   }
 
   ConstantInt *result = ConstantInt::get(o->C1->getType(), fact1.getSExtValue());
   ConstantInt *zero = ConstantInt::get(o->C1->getType(), 0);
   Instruction *addi = BinaryOperator::Create(Instruction::Add, result, zero);
   addi->insertAfter(o->inst);
-  return addi;
+  o->inst->replaceAllUsesWith(addi);
+
+  return true;
 }
 
 /** @brief Check the operation for algebraic identity and, in positive cases, return the instruction to replace
@@ -155,7 +168,7 @@ Instruction* getConstantFolding (Operation *o)
  * @param o operation examined
  * @return Value containing the intruction to replace, nullptr otherwise
 */
-Value* getAlgebraicIdentity (Operation *o)
+bool getAlgebraicIdentity (Operation *o)
 {
   ConstantInt* C = nullptr;
   switch (o->op)
@@ -182,7 +195,14 @@ Value* getAlgebraicIdentity (Operation *o)
       break;
   }
 
-  return (C) ? o->getOpposite(C) : nullptr;
+  if (!C)
+    return false;
+
+  /*The Value type is necessary in order to include also the Argument objects (representig
+  * function's arguments).
+  */
+  o->inst->replaceAllUsesWith(o->getOpposite(C));
+  return true;
 }
 
 /** @brief Check the operation for strength reduction optimiziations
@@ -192,7 +212,7 @@ Value* getAlgebraicIdentity (Operation *o)
  * @param o operation examined
  * @return the last instruction inserted, nullptr otherwise
 */
-Instruction* getStrengthReduction (Operation *o)
+bool getStrengthReduction (Operation *o)
 {
   ConstantInt *C = o->getFirstConstantInt();
   // Negative constants are not handled
@@ -239,41 +259,56 @@ Instruction* getStrengthReduction (Operation *o)
         break;
       }
   }
-  return newinst;
+
+  if (!newinst)
+    return false;
+
+  o->inst->replaceAllUsesWith(newinst);
+  return true;
 }
 
 /** @brief Apply Multi Instruction Optimization if possible.
  * 
- * @param o2 operation examined
- * @param constantsLog hash map containing 
+ * @param o operation examined
+ * @return Reference to the operand of the examined operation which is not constant.
 */
-Instruction* getMultiInstructionOpt (Operation *o2, std::unordered_map<ConstantInt*, std::vector<Operation*>> &constantsLog)
+bool getMultiInstructionOpt (Operation *o)
 {
-  ConstantInt *C = o2->getFirstConstantInt();
-  if (!o2->isValidForOpt())
-    return nullptr;
+  if (!o->isValidForOpt())
+    return false;
 
-  for (Operation *o1 : constantsLog[C])
+  for (auto &use : o->inst->uses())
   {
-    if (!o1->isValidForOpt())
+    Instruction *User = dyn_cast<Instruction>(use.getUser());
+    if (!User)
+      continue;
+
+    Operation *UserOp = new Operation(*(User));
+
+    #ifdef DEBUG
+    outs() << "I'm inside getMultiInstruction, just before the if\n";
+    #endif
+    if (!UserOp->isValidForOpt() || !o->hasSameConstant(UserOp) || !o->isOppositeOp(UserOp))
       continue;
     
-    if (o2->isOppositeOp(o1))
-    {
-      return o1->getRegThatIsResult(o2);
-    }
+    #ifdef DEBUG
+    outs() << "I'm inside getMultiInstruction, just before the return\n";
+    #endif
+    Value *res = dyn_cast<Value>(o->getOpposite(o->getFirstConstantInt()));
+    use->replaceAllUsesWith(res);
+    return true;
   }
-  return nullptr;
+
+  return false;
 }
 
 bool runOnBasicBlock(BasicBlock &B) 
 {
-  std::unordered_map<ConstantInt*, std::vector<Operation*>> constantsLog;
-  bool optimizedLastCycle = false;
+  bool Transformed = false;
 
   do 
   {
-    optimizedLastCycle = false;
+    Transformed = false;
     for (auto &inst : B) 
     {
       // check for binary operations
@@ -289,54 +324,33 @@ bool runOnBasicBlock(BasicBlock &B)
       if (nConstants == 0)
         continue;
 
-      if (o->C1) constantsLog[o->C1].push_back(o);
-      if (o->C2) constantsLog[o->C2].push_back(o);
-
-      /* Optimized instruction.
-      * The Value type is necessary in order to include also the Argument objects (representig
-      * function's arguments).
-      */
       #ifdef  DEBUG
       outs() << "Trying to do AlgebriaicIdentity\n";
       #endif
-      Value *i = getAlgebraicIdentity(o);
-      // handle infinite loop
-      //if (!i && nConstants == 2) i = getConstantFolding(o);
-      if (!i && nConstants == 2)
+      Transformed = getAlgebraicIdentity(o);
+      if (Transformed) continue;
+      if (nConstants == 2)
       {
         #ifdef  DEBUG
         outs() << "Trying to do ConstantFolding\n";
         #endif
-        i = getConstantFolding(o);
+        Transformed = getConstantFolding(o);
+        if (Transformed) continue;
       }
-      //if (!i) i = getMultiInstructionOpt(o, constantsLog);
-      if (!i)
-      {
-        #ifdef  DEBUG
-        outs() << "Trying to do Multi Instruction\n";
-        #endif
-        i = getMultiInstructionOpt(o, constantsLog);
-      }
-      //if (!i) i = getStrengthReduction(o);
-      if (!i)
-      {
-        #ifdef  DEBUG
-        outs() << "Trying to do Strength Reduction\n";
-        #endif
-        i = getStrengthReduction(o);
-      }
-
-      // replace the non-optimized instruction uses with the optimized ones
-      if (i)
-      {
-        inst.replaceAllUsesWith(i);
-        optimizedLastCycle = true;
-      }
+      #ifdef  DEBUG
+      outs() << "Trying to do Multi Instruction\n";
+      #endif
+      Transformed = getMultiInstructionOpt(o);
+      if (Transformed) continue;
+      #ifdef  DEBUG
+      outs() << "Trying to do Strength Reduction\n";
+      #endif
+      Transformed = getStrengthReduction(o);
+      if (Transformed) continue;
     }
   }
-  while (optimizedLastCycle && false);
+  while (Transformed && false);
 
-  constantsLog.clear();
   return true;
 }
 
