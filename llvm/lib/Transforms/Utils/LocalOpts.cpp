@@ -14,6 +14,10 @@
 
 using namespace llvm;
 
+/**
+ * Map associating binary operations with their opposite operation
+ * Signed operations are excluded
+*/
 const std::unordered_map<Instruction::BinaryOps, Instruction::BinaryOps> oppositeOp =
 {
   {BinaryOperator::Add, BinaryOperator::Sub},
@@ -24,8 +28,17 @@ const std::unordered_map<Instruction::BinaryOps, Instruction::BinaryOps> opposit
   {BinaryOperator::LShr, BinaryOperator::Shl}
 };
 
-std::pair<Value*, ConstantInt*>* getVarAndConst (Instruction &inst)
+/**
+ * Get a representation of a single variable binary operation in terms of variable and integer constant
+ * 
+ * @param inst the binary instruction
+ * @return a pair of a variable and a constant; if a constant is not present it return a nullptr in its place, and the variable
+ * returned is the first one
+ * 
+*/
+std::pair<Value*, ConstantInt*>* getVarAndConst (constInstruction &inst)
 {
+  // Add check of instruction type
   Value *val1 = inst.getOperand(0);
   Value *val2 = inst.getOperand(1);
   ConstantInt *CI = dyn_cast<ConstantInt>(val1);
@@ -35,11 +48,20 @@ std::pair<Value*, ConstantInt*>* getVarAndConst (Instruction &inst)
   }
   else
   {
+    // if val2 is not castable to ConstantInt the second entity of the pair is nullptr
     return new std::pair<Value*, ConstantInt*> (val1, dyn_cast<ConstantInt>(val2));
   }
+  // this should never be reached
+  llvm::outs() << "Trollollollol \n";
   return nullptr;
 }
 
+/**
+ * Get the number of integer constants in the binary instruction
+ * 
+ * @param inst the binary instruction
+ * @return the number of integer constants
+*/
 size_t getNConstants (Instruction &inst)
 {
   ConstantInt *C1 = dyn_cast<ConstantInt>(inst.getOperand(0));
@@ -52,20 +74,38 @@ size_t getNConstants (Instruction &inst)
   return counter;
 }
 
-/** @brief Compute constant folding optimization.
+/** @brief Compute constant folding optimization on a binary instruction and susbtitute the instruction uses
  * 
- * @param o operation examined
- * @return Add instruction containing the result as first operand, and 0 as second operand.
+ * @param inst the binary instruction
+ * @return true if optimized, false otherwise
 */
-bool getConstantFolding (Operation *o)
+bool tryConstantFolding (Instruction *inst)
 {
-  APInt fact1 = o->C1->getValue();
-  APInt fact2 = o->C2->getValue();
 
-  switch (o->op)
+  #ifdef  DEBUG
+  llvm::outs() << "Entered in function tryConstantFolding\n";
+  #endif
+
+  if (!inst)
+    return false;
+
+  ConstantInt *C1 = dyn_cast<ConstantInt>(inst->getOperand(0));
+  ConstantInt *C2 = dyn_cast<ConstantInt>(inst->getOperand(1));
+
+  if (!C1 || !C2)
+    return false;
+
+  #ifdef  DEBUG
+  llvm::outs() << "C1 :" << C1 << ",\tC2 :" <<C2 << "\n";
+  #endif
+
+  APInt fact1 = C1->getValue();
+  APInt fact2 = C2->getValue();
+
+  switch (inst->getOpcode())
   {
     case BinaryOperator::Add:
-      if (o->C1->isZero() || o->C2->isZero())
+      if (C1->isZero() || C2->isZero())
         return false;
       fact1 += fact2;
       break;
@@ -90,44 +130,54 @@ bool getConstantFolding (Operation *o)
       return false;
   }
 
-  ConstantInt *result = ConstantInt::get(o->C1->getType(), fact1.getSExtValue());
-  ConstantInt *zero = ConstantInt::get(o->C1->getType(), 0);
+  ConstantInt *result = ConstantInt::get(C1->getType(), fact1.getSExtValue());
+  ConstantInt *zero = ConstantInt::get(C1->getType(), 0);
   Instruction *addi = BinaryOperator::Create(Instruction::Add, result, zero);
-  addi->insertAfter(o->inst);
-  o->inst->replaceAllUsesWith(addi);
+
+  #ifdef  DEBUG
+  llvm::outs() << "Folding done. Result = " << result << "\nSubstituing operation\n";
+  #endif
+
+  addi->insertAfter(inst);
+  inst->replaceAllUsesWith(addi);
 
   return true;
 }
 
-/** @brief Check the operation for algebraic identity and, in positive cases, return the instruction to replace
+/** @brief Check the binary instruction for algebraic identity and, in positive cases, replace its uses
  * 
- * @param o operation examined
- * @return Value containing the intruction to replace, nullptr otherwise
+ * @param inst the binary instruction
+ * @return true if optimized, false otherwise
 */
-bool getAlgebraicIdentity (Operation *o)
+bool tryAlgebraicIdentity (Instruction *inst)
 {
-  ConstantInt* C = nullptr;
-  switch (o->op)
+  #ifdef  DEBUG
+  llvm::outs() << "Entered in function tryAlgebraicIdentity\n";
+  #endif
+
+  std::pair<Value*, ConstantInt*>* ValAndConst = getVarAndConst (&inst)
+  ConstantInt* C = ValAndConst.get(0);
+  switch (inst->getOpcode())
   {
     case BinaryOperator::Add:
-      if (o->C1 && o->C1->isZero())
-        C = o->C1;
+      if (C1 && C1->isZero())
+        C = inst->C1;
         LLVM_FALLTHROUGH;
     case BinaryOperator::Sub:
     case BinaryOperator::Shl:
     case BinaryOperator::LShr:
-      if (o->C2 && o->C2->isZero())
-        C = o->C2;
+      if (inst->C2 && inst->C2->isZero())
+        C = inst->C2;
       break;
 
     case BinaryOperator::Mul:
-      if (o->C1 && o->C1->isOne())
-        C = o->C1;
+      if (inst->C1 && inst->C1->isOne())
+        C = inst->C1;
         LLVM_FALLTHROUGH;
     case BinaryOperator::UDiv:
     case BinaryOperator::SDiv:
-      if (o->C2 && o->C2->isOne())
-        C = o->C2;
+      if (inst->C2 && inst->C2->isOne())
+        C = inst->C2;
       break;
   }
 
@@ -137,7 +187,7 @@ bool getAlgebraicIdentity (Operation *o)
   /*The Value type is necessary in order to include also the Argument objects (representig
   * function's arguments).
   */
-  o->inst->replaceAllUsesWith(o->getOpposite(C));
+  inst->inst->replaceAllUsesWith(inst->getOpposite(C));
   return true;
 }
 
@@ -148,7 +198,7 @@ bool getAlgebraicIdentity (Operation *o)
  * @param o operation examined
  * @return the last instruction inserted, nullptr otherwise
 */
-bool getStrengthReduction (Operation *o)
+bool tryStrengthReduction (Operation *o)
 {
   ConstantInt *C = o->getFirstConstantInt();
   // Negative constants are not handled
@@ -208,8 +258,12 @@ bool getStrengthReduction (Operation *o)
  * @param o operation examined
  * @return Reference to the operand of the examined operation which is not constant.
 */
-bool getMultiInstructionOpt (Operation *o)
+bool tryMultiInstructionOpt (Operation *o)
 {
+  #ifdef  DEBUG
+  outs() << "Trying to do Multi Instruction\n";
+  #endif
+
   if (!o->isValidForOpt())
     return false;
 
@@ -260,28 +314,19 @@ bool runOnBasicBlock(BasicBlock &B)
       if (nConstants == 0)
         continue;
 
-      #ifdef  DEBUG
-      outs() << "Trying to do AlgebriaicIdentity\n";
-      #endif
-      Transformed = getAlgebraicIdentity(o);
+      Transformed = tryAlgebraicIdentity(o);
       if (Transformed) continue;
       if (nConstants == 2)
       {
-        #ifdef  DEBUG
-        outs() << "Trying to do ConstantFolding\n";
-        #endif
         Transformed = getConstantFolding(o);
         if (Transformed) continue;
       }
-      #ifdef  DEBUG
-      outs() << "Trying to do Multi Instruction\n";
-      #endif
       Transformed = getMultiInstructionOpt(o);
       if (Transformed) continue;
       #ifdef  DEBUG
       outs() << "Trying to do Strength Reduction\n";
       #endif
-      Transformed = getStrengthReduction(o);
+      Transformed = tryStrengthReduction(o);
       if (Transformed) continue;
     }
   }
