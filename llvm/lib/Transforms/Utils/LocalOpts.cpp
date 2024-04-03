@@ -29,11 +29,16 @@ const std::unordered_map<Instruction::BinaryOps, Instruction::BinaryOps> opposit
 };
 
 /**
- * Get a representation of a single variable binary operation in terms of variable and integer constant
+ * Get a representation of a single variable binary operation in terms of a Value object and integer constant.
+ * The Value type is necessary in order to include also the Argument objects (representig
+ * function's arguments), and Constant objects (in case there are two of them).
+ * The function assumes that inst is a binary operation.
+ * In case of subtractions and divisions where the only constant is the first operand, the second attribute 
+ * in the returned pair will be nullptr.
  * 
  * @param inst the binary instruction
- * @return a pair of a variable and a constant; if a constant is not present it returns a nullptr in its place, and the variable
- * returned is the first one
+ * @return a pair of a Value object and a constant; if a constant is not present it returns a nullptr in its place, and the variable
+ * returned is the first operand
  * 
 */
 std::pair<Value*, ConstantInt*>* getVarAndConst (Instruction &inst)
@@ -49,10 +54,9 @@ std::pair<Value*, ConstantInt*>* getVarAndConst (Instruction &inst)
   else
   {
     // if val2 is not castable to ConstantInt the second entity of the pair is nullptr
+    // in case both val1 and val2 are constants, 
     return new std::pair<Value*, ConstantInt*> (val1, dyn_cast<ConstantInt>(val2));
   }
-  // this should never be reached
-  llvm::outs() << "Trollollollol \n";
   return nullptr;
 }
 
@@ -79,18 +83,14 @@ size_t getNConstants (Instruction &inst)
  * @param inst the binary instruction
  * @return true if optimized, false otherwise
 */
-bool tryConstantFolding (Instruction *inst)
+bool ConstantFolding (Instruction &inst)
 {
-
   #ifdef  DEBUG
-  llvm::outs() << "Entered in function tryConstantFolding\n";
+  llvm::outs() << "Entered in function ConstantFolding\n";
   #endif
 
-  if (!inst)
-    return false;
-
-  ConstantInt *C1 = dyn_cast<ConstantInt>(inst->getOperand(0));
-  ConstantInt *C2 = dyn_cast<ConstantInt>(inst->getOperand(1));
+  ConstantInt *C1 = dyn_cast<ConstantInt>(inst.getOperand(0));
+  ConstantInt *C2 = dyn_cast<ConstantInt>(inst.getOperand(1));
 
   if (!C1 || !C2)
     return false;
@@ -102,7 +102,7 @@ bool tryConstantFolding (Instruction *inst)
   APInt fact1 = C1->getValue();
   APInt fact2 = C2->getValue();
 
-  switch (inst->getOpcode())
+  switch (inst.getOpcode())
   {
     case BinaryOperator::Add:
       if (C1->isZero() || C2->isZero())
@@ -130,7 +130,7 @@ bool tryConstantFolding (Instruction *inst)
       return false;
   }
 
-  ConstantInt *result = ConstantInt::get(C1->getType(), fact1.getSExtValue());
+  ConstantInt *result = ConstantInt::get(C1->getType(), fact1.getZExtValue());
   ConstantInt *zero = ConstantInt::get(C1->getType(), 0);
   Instruction *addi = BinaryOperator::Create(Instruction::Add, result, zero);
 
@@ -138,8 +138,8 @@ bool tryConstantFolding (Instruction *inst)
   llvm::outs() << "Folding done. Result = " << result << "\nSubstituing operation\n";
   #endif
 
-  addi->insertAfter(inst);
-  inst->replaceAllUsesWith(addi);
+  addi->insertAfter(&inst);
+  inst.replaceAllUsesWith(addi);
 
   return true;
 }
@@ -149,46 +149,38 @@ bool tryConstantFolding (Instruction *inst)
  * @param inst the binary instruction
  * @return true if optimized, false otherwise
 */
-bool tryAlgebraicIdentity (Instruction *inst)
+bool tryAlgebraicIdentity (Instruction &inst, std::pair<Value*, ConstantInt*> *VC)
 {
   #ifdef  DEBUG
-  llvm::outs() << "Entered in function tryAlgebraicIdentity\n";
+  llvm::outs() << "Entered in function AlgebraicIdentity\n";
   #endif
 
-  std::pair<Value*, ConstantInt*>* VarAndConst = getVarAndConst(&inst)
-
-  // getVarAndConst can return a ConstantInt in first position. In this case  
-  Value* val = VarAndConst.get(0);
-  ConstantInt* con = VarAndConst.get(1);
+  // getVarAndConst can return a ConstantInt in first position. In this case
   bool ToReplace = false;
 
-
-  // We use switch case for future implementation of AlgebraicIdentity not yet implemented (like -(-i))
-  switch (inst->getOpcode())
+  // Switch case has been adopted for modularity reasons
+  switch (inst.getOpcode())
   {
     case BinaryOperator::Add:
     case BinaryOperator::Sub:
     case BinaryOperator::Shl:
     case BinaryOperator::LShr:
-      if (con && con->isZero())
+      if (VC->second->getValue().isZero())
         ToReplace = true;
       break;
     case BinaryOperator::Mul:
     case BinaryOperator::UDiv:
     case BinaryOperator::SDiv:
-      if (con && con->isOne())
+      if (VC->second->getValue().isOne())
         ToReplace = true;
       break;
   }
-
-/*  if (!C)
-    return false;*/
 
   /*The Value type is necessary in order to include also the Argument objects (representig
   * function's arguments).
   */
   if(ToReplace)
-    inst->replaceAllUsesWith(val);
+    inst.replaceAllUsesWith(VC->first);
   return ToReplace;
 }
 
@@ -199,78 +191,66 @@ bool tryAlgebraicIdentity (Instruction *inst)
  * @param inst the binary instruction
  * @return true if optimized, false otherwise
 */
-bool tryStrengthReduction (Instruction *inst)
+bool StrengthReduction (Instruction &inst, std::pair<Value*, ConstantInt*> *VC)
 {
-
   #ifdef DEBUG
-  llvm::outs() << "Entered in function tryStrengthReduction\n";
+  llvm::outs() << "Entered in function StrengthReduction\n";
   #endif
 
-  if (!inst)
-    return false;
-
-  std::pair<Value*, ConstantInt*>* VarAndConst = getVarAndConst(&inst);
-  Value* val = VarAndConst.get(0);
-  ConstantInt* con = VarAndConst.get(1);
   // Negative constants are not handled
-  unsigned int shiftVal = con->getValue().ceilLogBase2();
-  ConstantInt *shift = ConstantInt::get(con->getType(), shiftVal);
+  unsigned int shiftVal = VC->second->getValue().ceilLogBase2();
+  ConstantInt *shift = ConstantInt::get(VC->second->getType(), shiftVal);
 
   // Last instruction to be insert
-  Instruction* Lastinst = nullptr;
-  switch (inst->getOpcode())
+  Instruction* lastinst = nullptr;
+  switch (inst.getOpcode())
   {
       case BinaryOperator::Mul:
       {
-        Instruction *shli = BinaryOperator::Create(Instruction::Shl, val, shift);
-        shli->insertAfter(inst);
-        unsigned int restVal = (1 << shiftVal) - con->getValue().getSExtValue();
-        ConstantInt *rest = ConstantInt::get(con->getType(), restVal);
+        Instruction *shli = BinaryOperator::Create(Instruction::Shl, VC->first, shift);
+        shli->insertAfter(&inst);
+        unsigned int restVal = (1 << shiftVal) - VC->second->getValue().getZExtValue();
+        ConstantInt *rest = ConstantInt::get(VC->second->getType(), restVal);
 
         if (restVal == 0)
         {
-          Lastinst = shli;
+          lastinst = shli;
         }
         else if (restVal == 1)
         {
-          Lastinst = BinaryOperator::Create(BinaryOperator::Sub, shli, val);
-          Lastinst->insertAfter(shli);
+          lastinst = BinaryOperator::Create(BinaryOperator::Sub, shli, VC->first);
+          lastinst->insertAfter(shli);
         }
         // if rest is > 1 an intermediate multiplication is needed
         else if (restVal > 1)
         {
-          Instruction *muli = BinaryOperator::Create(BinaryOperator::Mul, val, rest);
+          Instruction *muli = BinaryOperator::Create(BinaryOperator::Mul, VC->first, rest);
           muli->insertAfter(shli);
-          Lastinst = BinaryOperator::Create(BinaryOperator::Sub, shli, muli);
-          Lastinst->insertAfter(muli);
+          lastinst = BinaryOperator::Create(BinaryOperator::Sub, shli, muli);
+          lastinst->insertAfter(muli);
         }
         break;
       }
 
       case BinaryOperator::UDiv:
-      case BinaryOperator::SDiv:
       {
-        if (con && con->getValue().isPowerOf2())
+        if (VC->second->getValue().isPowerOf2())
         {
-          Lastinst = BinaryOperator::Create(Instruction::LShr, val, shift);
-          Lastinst->insertAfter(inst);
+          lastinst = BinaryOperator::Create(Instruction::LShr, VC->first, shift);
+          lastinst->insertAfter(&inst);
         }
         break;
       }
   }
 
   #ifdef DEBUG
-  llvm::outs() << "LastInst: " << Lastinst << "\n";
+  llvm::outs() << "LastInst: " << lastinst << "\n";
   #endif
 
-  if (!Lastinst)
-    #ifdef DEBUG
-    llvm::outs() << "No StrengthReduction operations done!\n";
-    #endif
-    return false;
-
-  inst->replaceAllUsesWith(Lastinst);
-  return true;
+  if (lastinst)
+    inst.replaceAllUsesWith(lastinst);
+  // if lastinst is nullptr (e.g. strength reduction has not been adopted), it return false, otherwise true
+  return lastinst;
 }
 
 /** @brief Apply Multi Instruction Optimization if possible.
@@ -278,40 +258,34 @@ bool tryStrengthReduction (Instruction *inst)
  * @param o operation examined
  * @return Reference to the operand of the examined operation which is not constant.
 */
-bool tryMultiInstructionOpt (Instruction *inst)
+bool MultiInstructionOpt (Instruction &inst, std::pair<Value*, ConstantInt*> *VC)
 {
   #ifdef  DEBUG
-  outs() << "Trying to do Multi Instruction\n";
+  llvm::outs() << "Entered in function MultiInstructionOpt\n";
   #endif
 
-  if (!inst)
-    return false;
-  std::pair<Value*, ConstantInt*>* VarAndConst = getVarAndConst(&inst);
-  Value* val = VarAndConst.get(0);
-  ConstantInt* con = VarAndConst.get(1);
-
-  if (!con)
-    return false;
-
-  for (auto &use : inst->inst->uses())
+  for (auto &use : inst.uses())
   {
     Instruction *User = dyn_cast<Instruction>(use.getUser());
-    if (!User)
+    if (!User || !User->isBinaryOp())
       continue;
 
-    Operation *UserOp = new Operation(*(User));
+    std::pair<Value*, ConstantInt*> *VCUser = getVarAndConst(*User);
 
     #ifdef DEBUG
     outs() << "I'm inside getMultiInstruction, just before the if\n";
     #endif
-    if (!UserOp->isValidForOpt() || !inst->hasSameConstant(UserOp) || !inst->isOppositeOp(UserOp))
+
+    if (!VCUser->second 
+      || (VCUser->second->getValue() != VC->second->getValue()) 
+      || (oppositeOp.at(dyn_cast<Instruction::BinaryOps>(inst.getOpcode())) != User->getOpcode()))
       continue;
     
     #ifdef DEBUG
     outs() << "I'm inside getMultiInstruction, just before the return\n";
     #endif
-    Value *res = dyn_cast<Value>(inst->getOpposite(inst->getFirstConstantInt()));
-    use->replaceAllUsesWith(res);
+
+    use->replaceAllUsesWith(VC->first);
     return true;
   }
 
@@ -330,33 +304,30 @@ bool runOnBasicBlock(BasicBlock &B)
       // check for binary operations
       if (!inst.isBinaryOp())
         continue;
-      Operation *o = new Operation (inst);
 
       #ifdef  DEBUG
       outs() << "Instruction: " << inst << "\n";
       #endif
       
-      size_t nConstants = o->getNConstants();
+      size_t nConstants = getNConstants(inst);
       if (nConstants == 0)
         continue;
 
-      Transformed = tryAlgebraicIdentity(o);
-      if (Transformed) continue;
-      if (nConstants == 2)
-      {
-        Transformed = getConstantFolding(o);
-        if (Transformed) continue;
-      }
-      Transformed = getMultiInstructionOpt(o);
-      if (Transformed) continue;
-      #ifdef  DEBUG
-      outs() << "Trying to do Strength Reduction\n";
-      #endif
-      Transformed = tryStrengthReduction(o);
-      if (Transformed) continue;
+      std::pair<Value*, ConstantInt*> *VC = getVarAndConst(inst);
+      /* the following check is needed to skip ensure there is a constant
+      * in the "right" position.
+      * e.g. %10 = 3 - %5
+      */
+      if (!VC->second)
+        continue;
+
+      Transformed = tryAlgebraicIdentity(inst, VC)
+        || (nConstants == 2 && ConstantFolding(inst))
+        || MultiInstructionOpt(inst, VC)
+        || StrengthReduction(inst, VC);
     }
   }
-  while (Transformed && false);
+  while (Transformed);
 
   return true;
 }
