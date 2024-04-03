@@ -11,22 +11,23 @@
 #include "llvm/Transforms/Utils/LocalOpts.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instructions.h"
+#include "map"
 
 using namespace llvm;
 
-/**
- * Map associating binary operations with their opposite operation
- * Signed operations are excluded
-*/
-const std::unordered_map<Instruction::BinaryOps, Instruction::BinaryOps> oppositeOp =
-{
-  {BinaryOperator::Add, BinaryOperator::Sub},
-  {BinaryOperator::Sub, BinaryOperator::Add},
-  {BinaryOperator::Mul, BinaryOperator::UDiv},
-  {BinaryOperator::UDiv, BinaryOperator::Mul},
-  {BinaryOperator::Shl, BinaryOperator::LShr},
-  {BinaryOperator::LShr, BinaryOperator::Shl}
-};
+    /**
+    * Map associating binary operations with their opposite operation
+    * Signed operations are excluded
+    */
+    const std::map<Instruction::BinaryOps, Instruction::BinaryOps> oppositeOp =
+    {
+      {Instruction::Add, Instruction::Sub},
+      {Instruction::Sub, Instruction::Add},
+      {Instruction::Mul, Instruction::UDiv},
+      {Instruction::UDiv, Instruction::Mul},
+      {Instruction::Shl, Instruction::LShr},
+      {Instruction::LShr, Instruction::Shl}
+    };
 
 /**
  * Get a representation of a single variable binary operation in terms of a Value object and integer constant.
@@ -44,10 +45,11 @@ const std::unordered_map<Instruction::BinaryOps, Instruction::BinaryOps> opposit
 std::pair<Value*, ConstantInt*>* getVarAndConst (Instruction &inst)
 {
   // TODO: Add check of instruction type
+  unsigned int opcode = inst.getOpcode();
   Value *val1 = inst.getOperand(0);
   Value *val2 = inst.getOperand(1);
   ConstantInt *CI = dyn_cast<ConstantInt>(val1);
-  if ((BinaryOperator::Add || BinaryOperator::Mul) && CI)
+  if ((opcode == BinaryOperator::Add || opcode == BinaryOperator::Mul) && CI)
   {
     return new std::pair<Value*, ConstantInt*> (val2, CI);
   }
@@ -278,7 +280,7 @@ bool MultiInstructionOpt (Instruction &inst, std::pair<Value*, ConstantInt*> *VC
 
     if (!VCUser->second 
       || (VCUser->second->getValue() != VC->second->getValue()) 
-      || (oppositeOp.at(dyn_cast<Instruction::BinaryOps>(inst.getOpcode())) != User->getOpcode()))
+      || (oppositeOp.at(static_cast<BinaryOperator::BinaryOps>(inst.getOpcode())) != User->getOpcode()))
       continue;
     
     #ifdef DEBUG
