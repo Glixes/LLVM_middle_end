@@ -287,7 +287,7 @@ bool MultiInstructionOpt (Instruction &inst, std::pair<Value*, ConstantInt*> *VC
     outs() << "I'm inside getMultiInstruction, just before the return\n";
     #endif
 
-    use->replaceAllUsesWith(VC->first);
+    User->replaceAllUsesWith(VC->first);
     return true;
   }
 
