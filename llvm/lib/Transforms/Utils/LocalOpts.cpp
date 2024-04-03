@@ -14,106 +14,42 @@
 
 using namespace llvm;
 
-Operation::Operation(Instruction &inst) : inst(&inst), register1(inst.getOperand(0)),
-register2(inst.getOperand(1)), C1(dyn_cast<ConstantInt>(register1)),C2(dyn_cast<ConstantInt>(register2)), 
-op(inst.getOpcode()) {}
-
-
-size_t Operation::getNConstants ()
+const std::unordered_map<Instruction::BinaryOps, Instruction::BinaryOps> oppositeOp =
 {
+  {BinaryOperator::Add, BinaryOperator::Sub},
+  {BinaryOperator::Sub, BinaryOperator::Add},
+  {BinaryOperator::Mul, BinaryOperator::UDiv},
+  {BinaryOperator::UDiv, BinaryOperator::Mul},
+  {BinaryOperator::Shl, BinaryOperator::LShr},
+  {BinaryOperator::LShr, BinaryOperator::Shl}
+};
+
+std::pair<Value*, ConstantInt*>* getVarAndConst (Instruction &inst)
+{
+  Value *val1 = inst.getOperand(0);
+  Value *val2 = inst.getOperand(1);
+  ConstantInt *CI = dyn_cast<ConstantInt>(val1);
+  if ((BinaryOperator::Add || BinaryOperator::Mul) && CI)
+  {
+    return new std::pair<Value*, ConstantInt*> (val2, CI);
+  }
+  else
+  {
+    return new std::pair<Value*, ConstantInt*> (val1, dyn_cast<ConstantInt>(val2));
+  }
+  return nullptr;
+}
+
+size_t getNConstants (Instruction &inst)
+{
+  ConstantInt *C1 = dyn_cast<ConstantInt>(inst.getOperand(0));
+  ConstantInt *C2 = dyn_cast<ConstantInt>(inst.getOperand(1));
   size_t counter = 0;
   if (C1)
     counter++;
   if (C2)
     counter++;
   return counter;
-}
-
-Value* Operation::getOpposite (ConstantInt *C)
-{
-  if (C == C1)
-    return register2;
-  else if (C == C2)
-    return register1;
-  return nullptr;
-}
-
-ConstantInt* Operation::getFirstConstantInt ()
-{
-  return (C1) ? C1 : C2;
-}
-
-bool Operation::isOppositeOp (Operation *x)
-{
-  switch (op)
-  {
-    case BinaryOperator::Add:
-      if (x->op == BinaryOperator::Sub) return true;
-      break;
-    
-    case BinaryOperator::Sub:
-      if (x->op == BinaryOperator::Add) return true;
-      break;
-
-    case BinaryOperator::Mul:
-      if (x->op == BinaryOperator::UDiv ||
-          x->op == BinaryOperator::SDiv) return true;
-      break;
-
-    case BinaryOperator::SDiv:
-      if (x->op == BinaryOperator::Mul) return true;
-      break;
-
-    case BinaryOperator::UDiv:
-      if (x->op == BinaryOperator::Mul) return true;
-      break;
-
-    case BinaryOperator::Shl:
-      if (x->op == BinaryOperator::LShr) return true;
-      break;
-
-    case BinaryOperator::LShr:
-      if (x->op == BinaryOperator::Shl) return true;
-      break;
-  }
-  return false;
-}
-
-bool Operation::isValidForOpt()
-{
-  unsigned n_const = Operation::getNConstants();
-  if (n_const < 1 || op == BinaryOperator::Shl || op == BinaryOperator::LShr)
-    return false;
-  if (n_const == 1 && (op == BinaryOperator::Sub || op == BinaryOperator::SDiv || op == BinaryOperator::UDiv))
-    return (!C1? true : false);
-  return true;
-}
-
-bool Operation::hasSameConstant(Operation *x)
-{
-  if (C1)
-  {
-    if (x->C1 && C1->getValue() == x->C1->getValue())
-    {
-      return true;
-    }
-    else if (x->C2 && C1->getValue() == x->C2->getValue())
-    {
-      return true;
-    }
-  }
-  else if (C2)
-  {
-    if (x->C1 && C2->getValue() == x->C1->getValue())
-    {
-      return true;
-    }
-    else if (x->C2 && C2->getValue() == x->C2->getValue())
-    {
-      return true;
-    }
-  }
-  return false;
 }
 
 /** @brief Compute constant folding optimization.
