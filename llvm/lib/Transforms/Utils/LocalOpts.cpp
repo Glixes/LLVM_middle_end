@@ -11,7 +11,7 @@
 #include "llvm/Transforms/Utils/LocalOpts.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instructions.h"
-#include "map"
+#include "unordered_set"
 
 using namespace llvm;
 
@@ -19,7 +19,7 @@ using namespace llvm;
 * Map associating binary operations with their opposite operation
 * Signed operations are excluded
 */
-const std::map<Instruction::BinaryOps, Instruction::BinaryOps> oppositeOp =
+const std::unordered_map<Instruction::BinaryOps, Instruction::BinaryOps> oppositeOp =
 {
   {Instruction::Add, Instruction::Sub},
   {Instruction::Sub, Instruction::Add},
@@ -296,12 +296,11 @@ bool MultiInstructionOpt (Instruction &inst, std::pair<Value*, ConstantInt*> *VC
 
 bool runOnBasicBlock(BasicBlock &B) 
 {
-  std::vector<Instruction*> DeadCode;
-  bool TransformedGlobal = false;
+  std::unordered_set<Instruction*> DeadCode;
   bool Transformed = false;
-  bool TransformedLocal = false;
+  bool TransformedGlobal = false;
 
-  do 
+  do
   {
     Transformed = false;
     for (auto &inst : B) 
@@ -316,10 +315,7 @@ bool runOnBasicBlock(BasicBlock &B)
       
       size_t nConstants = getNConstants(inst);
       if (nConstants == 0)
-      {
-        TransformedLocal = false;
         continue;
-      }
 
       std::pair<Value*, ConstantInt*> *VC = getVarAndConst(inst);
       /* the following check is needed to skip ensure there is a constant
@@ -327,40 +323,36 @@ bool runOnBasicBlock(BasicBlock &B)
       * e.g. %10 = 3 - %5
       */
       if (!VC->second)
-      {
-        TransformedLocal = false;
         continue;
-      }
 
-      TransformedLocal = AlgebraicIdentity(inst, VC)
+      bool TransformedLocal = (!inst.getNumUses())
+        || AlgebraicIdentity(inst, VC)
         || (nConstants == 2 && ConstantFolding(inst))
         || MultiInstructionOpt(inst, VC)
         || StrengthReduction(inst, VC);
 
-      if (TransformedLocal)
+      if (!inst.getNumUses())
       {
+        #ifdef  DEBUG
         outs() << "Instruction: " << inst << " is in DeadCode\n";
-        DeadCode.push_back(&inst);
+        #endif
+        DeadCode.insert(&inst);
       }
 
       Transformed = Transformed || TransformedLocal;
     }
+
+    // dead code elimination
+    if (DeadCode.size() > 0)
+    {
+      for (auto &inst : DeadCode)
+        inst->eraseFromParent();
+      DeadCode.clear();
+    }
+
     TransformedGlobal = TransformedGlobal || Transformed;
   }
   while (Transformed);
-
-  // dead code elimination
-  if (TransformedGlobal)
-  {
-    for (auto &inst : DeadCode)
-    {
-      #ifdef DEBUG
-      outs() << "inst : " << *inst << "\n";
-      outs() << "inst address: " << inst << "\n";
-      #endif
-      inst->eraseFromParent();
-    }
-  }
 
   return TransformedGlobal;
 }
