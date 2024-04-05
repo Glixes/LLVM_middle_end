@@ -11,23 +11,23 @@
 #include "llvm/Transforms/Utils/LocalOpts.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instructions.h"
-#include "map"
+#include "unordered_set"
 
 using namespace llvm;
 
-    /**
-    * Map associating binary operations with their opposite operation
-    * Signed operations are excluded
-    */
-    const std::map<Instruction::BinaryOps, Instruction::BinaryOps> oppositeOp =
-    {
-      {Instruction::Add, Instruction::Sub},
-      {Instruction::Sub, Instruction::Add},
-      {Instruction::Mul, Instruction::UDiv},
-      {Instruction::UDiv, Instruction::Mul},
-      {Instruction::Shl, Instruction::LShr},
-      {Instruction::LShr, Instruction::Shl}
-    };
+/**
+* Map associating binary operations with their opposite operation
+* Signed operations are excluded
+*/
+const std::unordered_map<Instruction::BinaryOps, Instruction::BinaryOps> oppositeOp =
+{
+  {Instruction::Add, Instruction::Sub},
+  {Instruction::Sub, Instruction::Add},
+  {Instruction::Mul, Instruction::UDiv},
+  {Instruction::UDiv, Instruction::Mul},
+  {Instruction::Shl, Instruction::LShr},
+  {Instruction::LShr, Instruction::Shl}
+};
 
 /**
  * Get a representation of a single variable binary operation in terms of a Value object and integer constant.
@@ -151,7 +151,7 @@ bool ConstantFolding (Instruction &inst)
  * @param inst the binary instruction
  * @return true if optimized, false otherwise
 */
-bool tryAlgebraicIdentity (Instruction &inst, std::pair<Value*, ConstantInt*> *VC)
+bool AlgebraicIdentity (Instruction &inst, std::pair<Value*, ConstantInt*> *VC)
 {
   #ifdef  DEBUG
   llvm::outs() << "Entered in function AlgebraicIdentity\n";
@@ -207,42 +207,42 @@ bool StrengthReduction (Instruction &inst, std::pair<Value*, ConstantInt*> *VC)
   Instruction* lastinst = nullptr;
   switch (inst.getOpcode())
   {
-      case BinaryOperator::Mul:
-      {
-        Instruction *shli = BinaryOperator::Create(Instruction::Shl, VC->first, shift);
-        shli->insertAfter(&inst);
-        unsigned int restVal = (1 << shiftVal) - VC->second->getValue().getZExtValue();
-        ConstantInt *rest = ConstantInt::get(VC->second->getType(), restVal);
+    case BinaryOperator::Mul:
+    {
+      Instruction *shli = BinaryOperator::Create(Instruction::Shl, VC->first, shift);
+      shli->insertAfter(&inst);
+      unsigned int restVal = (1 << shiftVal) - VC->second->getValue().getZExtValue();
+      ConstantInt *rest = ConstantInt::get(VC->second->getType(), restVal);
 
-        if (restVal == 0)
-        {
-          lastinst = shli;
-        }
-        else if (restVal == 1)
-        {
-          lastinst = BinaryOperator::Create(BinaryOperator::Sub, shli, VC->first);
-          lastinst->insertAfter(shli);
-        }
-        // if rest is > 1 an intermediate multiplication is needed
-        else if (restVal > 1)
-        {
-          Instruction *muli = BinaryOperator::Create(BinaryOperator::Mul, VC->first, rest);
-          muli->insertAfter(shli);
-          lastinst = BinaryOperator::Create(BinaryOperator::Sub, shli, muli);
-          lastinst->insertAfter(muli);
-        }
-        break;
-      }
-
-      case BinaryOperator::UDiv:
+      if (restVal == 0)
       {
-        if (VC->second->getValue().isPowerOf2())
-        {
-          lastinst = BinaryOperator::Create(Instruction::LShr, VC->first, shift);
-          lastinst->insertAfter(&inst);
-        }
-        break;
+        lastinst = shli;
       }
+      else if (restVal == 1)
+      {
+        lastinst = BinaryOperator::Create(BinaryOperator::Sub, shli, VC->first);
+        lastinst->insertAfter(shli);
+      }
+      // if rest is > 1 an intermediate multiplication is needed
+      else if (restVal > 1)
+      {
+        Instruction *muli = BinaryOperator::Create(BinaryOperator::Mul, VC->first, rest);
+        muli->insertAfter(shli);
+        lastinst = BinaryOperator::Create(BinaryOperator::Sub, shli, muli);
+        lastinst->insertAfter(muli);
+      }
+      break;
+    }
+
+    case BinaryOperator::UDiv:
+    {
+      if (VC->second->getValue().isPowerOf2())
+      {
+        lastinst = BinaryOperator::Create(Instruction::LShr, VC->first, shift);
+        lastinst->insertAfter(&inst);
+      }
+      break;
+    }
   }
 
   #ifdef DEBUG
@@ -296,9 +296,11 @@ bool MultiInstructionOpt (Instruction &inst, std::pair<Value*, ConstantInt*> *VC
 
 bool runOnBasicBlock(BasicBlock &B) 
 {
+  std::unordered_set<Instruction*> DeadCode;
   bool Transformed = false;
+  bool TransformedGlobal = false;
 
-  do 
+  do
   {
     Transformed = false;
     for (auto &inst : B) 
@@ -323,15 +325,36 @@ bool runOnBasicBlock(BasicBlock &B)
       if (!VC->second)
         continue;
 
-      Transformed = tryAlgebraicIdentity(inst, VC)
+      bool TransformedLocal = (!inst.getNumUses())
+        || AlgebraicIdentity(inst, VC)
         || (nConstants == 2 && ConstantFolding(inst))
         || MultiInstructionOpt(inst, VC)
         || StrengthReduction(inst, VC);
+
+      if (!inst.getNumUses())
+      {
+        #ifdef  DEBUG
+        outs() << "Instruction: " << inst << " is in DeadCode\n";
+        #endif
+        DeadCode.insert(&inst);
+      }
+
+      Transformed = Transformed || TransformedLocal;
     }
+
+    // dead code elimination
+    if (DeadCode.size() > 0)
+    {
+      for (auto &inst : DeadCode)
+        inst->eraseFromParent();
+      DeadCode.clear();
+    }
+
+    TransformedGlobal = TransformedGlobal || Transformed;
   }
   while (Transformed);
 
-  return true;
+  return TransformedGlobal;
 }
 
 bool runOnFunction(Function &F) {
