@@ -1,4 +1,5 @@
 #include "llvm/Transforms/Utils/LoopOpts.h"
+#include "llvm/IR/Dominators.h"
 
 using namespace llvm;
 
@@ -40,7 +41,7 @@ PreservedAnalyses LoopOpts::run (Loop &L, LoopAnalysisManager &LAM,
 {
     //std::unordered_map<const Instruction*, bool> invariant_map;
     DominatorTree &DT = LAR.DT;
-    //BasicBlock *BB = (DT.getRootNode())->getBlock();
+    BasicBlock *BB = (DT.getRootNode())->getBlock();
     
     outs() << "Pre-header: " << *(L.getLoopPreheader()) << "\n";
     outs() << "Header: " << *(L.getHeader()) << "\n";
