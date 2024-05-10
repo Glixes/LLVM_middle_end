@@ -9,7 +9,7 @@ bool isAlreadyLoopInvariant(Instruction *inst, std::unordered_map<const Instruct
     // return inst->getMetadata("invariant");
 }
 
-bool isValueInvariant(Value *v, Loop* L, std::unordered_map<const Instruction*, bool> invariant_map)
+bool isLoopInvariant(Value *v, Loop* L, std::unordered_map<const Instruction*, bool> invariant_map)
 {
     Instruction *v_inst = dyn_cast<Instruction>(v);
     outs() << "Is value " << v_inst << " invariant?\n";
@@ -32,13 +32,15 @@ bool isLoopInvariant(const Instruction *inst, Loop* L, std::unordered_map<const 
     Value *val2 = inst->getOperand(1);
     outs() << "Analyzing operands: " << *val1 << ", " << *val2 << "\n";
     
-    return isValueInvariant(val1, L, invariant_map) && isValueInvariant(val2, L, invariant_map);
+    return isLoopInvariant(val1, L, invariant_map) && isLoopInvariant(val2, L, invariant_map);
 }
 
 PreservedAnalyses LoopOpts::run (Loop &L, LoopAnalysisManager &LAM, 
                                     LoopStandardAnalysisResults &LAR, LPMUpdater &LU)
 {
     std::unordered_map<const Instruction*, bool> invariant_map;
+    DominatorTree &DT = LAR.DT;
+    //BasicBlock *BB = (DT.getRootNode())->getBlock();
     
     outs() << "Pre-header: " << *(L.getLoopPreheader()) << "\n";
     outs() << "Header: " << *(L.getHeader()) << "\n";
