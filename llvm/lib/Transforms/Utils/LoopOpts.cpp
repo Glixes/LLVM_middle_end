@@ -13,9 +13,11 @@ bool isAlreadyLoopInvariant(Instruction *inst)
 bool isLoopInvariant(Value *v, Loop* L)
 {
     Instruction *v_inst = dyn_cast<Instruction>(v);
-    outs() << "Is value " << v_inst << " invariant?\n";
+    // v_inst is NULL when v is an argument of the function
     if (!v_inst || isAlreadyLoopInvariant(v_inst) || !L->contains(v_inst))
         return true;
+    
+    outs() << "Is value " << *v_inst << " invariant?\n";
     
     Constant *c_inst = dyn_cast<Constant>(v);
     outs() << "Is the value " << c_inst << " constant?\n";
@@ -36,12 +38,36 @@ bool isLoopInvariant(const Instruction *inst, Loop* L)
     return isLoopInvariant(val1, L) && isLoopInvariant(val2, L);
 }
 
+void markIfUseDominator(Instruction *inst, DominatorTree *DT)
+{
+    for (Value::use_iterator iter = inst->use_begin(); iter != inst->use_end(); iter++)
+    {
+        Use *use_of_inst = &(*iter);
+        Value *val = dyn_cast<Value>(inst);
+        if(DT->dominates(val, *use_of_inst))
+        {
+            LLVMContext &C = inst->getContext();
+            MDNode *N = MDNode::get(C, MDString::get(C, ""));
+            inst->setMetadata("use dominator", N);
+        }
+    }
+}
+
 PreservedAnalyses LoopOpts::run (Loop &L, LoopAnalysisManager &LAM, 
                                     LoopStandardAnalysisResults &LAR, LPMUpdater &LU)
 {
     //std::unordered_map<const Instruction*, bool> invariant_map;
-    DominatorTree &DT = LAR.DT;
-    BasicBlock *BB = (DT.getRootNode())->getBlock();
+    DominatorTree *DT = &LAR.DT;
+    BasicBlock *root_DT = (DT->getRootNode())->getBlock();
+    SmallVector<BasicBlock*> exiting_blocks;
+    
+    /*
+    for (auto i = root_DT->begin(); i != root_DT->end(); i++)
+    {
+        Instruction *inst = dyn_cast<Instruction>(i);
+        outs() << *inst << "\n";
+    }
+    */
     
     outs() << "Pre-header: " << *(L.getLoopPreheader()) << "\n";
     outs() << "Header: " << *(L.getHeader()) << "\n";
@@ -50,6 +76,8 @@ PreservedAnalyses LoopOpts::run (Loop &L, LoopAnalysisManager &LAM,
     for (auto BI = L.block_begin(); BI != L.block_end(); ++BI)
     {
         BasicBlock *BB = *BI;
+        if (L.isLoopExiting(BB))
+            exiting_blocks.push_back(BB);
         outs() << "Basic block: " << *BB << "\n";
         for (auto i = BB->begin(); i != BB->end(); i++)
         {
@@ -67,7 +95,9 @@ PreservedAnalyses LoopOpts::run (Loop &L, LoopAnalysisManager &LAM,
                 
                 outs() << "Loop invariant instruction detected: " << *inst << "\n";
             }
+            markIfUseDominator(inst, DT);
         }
     }
+
     return PreservedAnalyses::all();
 }
