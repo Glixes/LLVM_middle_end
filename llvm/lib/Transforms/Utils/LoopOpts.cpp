@@ -74,11 +74,14 @@ void markExitsDominatorBlocks(Loop &L, DominatorTree *DT)
 
 void markIfUseDominator(Instruction *inst, DominatorTree *DT)
 {
-    for (Value::use_iterator iter = inst->use_begin(); iter != inst->use_end(); iter++)
+    for (auto iter = inst->use_begin(); iter != inst->use_end(); ++iter)
     {
         Use *use_of_inst = &(*iter);
         Value *val = dyn_cast<Value>(inst);
-        if(!DT->dominates(val, *use_of_inst))
+        // L.contains(use_of_inst) &&
+        outs() << "Use: " << *(dyn_cast<Instruction>(*iter)) << "\n";
+        outs() << DT->dominates(val, *use_of_inst) << "\n";
+        if (!DT->dominates(val, *use_of_inst))
             return;
     }
     LLVMContext &C = inst->getContext();
