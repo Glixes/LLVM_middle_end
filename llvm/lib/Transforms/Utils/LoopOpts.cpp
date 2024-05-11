@@ -5,8 +5,6 @@ using namespace llvm;
 
 bool isAlreadyLoopInvariant(Instruction *inst)
 {
-    //outs() << "Analyzing map: " << invariant_map[inst] << "\n";
-    //return invariant_map[inst];
     return inst->getMetadata("invariant");
 }
 
@@ -38,36 +36,63 @@ bool isLoopInvariant(const Instruction *inst, Loop* L)
     return isLoopInvariant(val1, L) && isLoopInvariant(val2, L);
 }
 
+void markExitsDominatorBlocks(Loop &L, DominatorTree *DT)
+{
+    SmallVector<BasicBlock*> exiting_blocks;
+    for (auto BI = L.block_begin(); BI != L.block_end(); ++BI)
+    {
+        BasicBlock *BB = *BI;
+        if (L.isLoopExiting(BB))
+            exiting_blocks.push_back(BB);
+    }
+
+    for (auto BI = L.block_begin(); BI != L.block_end(); ++BI)
+    {
+        BasicBlock *BB = *BI;
+        LLVMContext &C = BB->getContext();
+        outs() << "Basic block: " << *BB << "\n";
+
+        bool is_dominator = true;
+        for (auto EB: exiting_blocks)
+        {
+            if (!DT->dominates(BB, EB))
+            {
+                is_dominator = false;
+                break;
+            }
+        }
+
+        if (is_dominator)
+        {
+            MDNode *N = MDNode::get(C, MDString::get(C, ""));
+            Instruction *terminator = BB->getTerminator();
+            terminator->setMetadata("exits dominator", N);
+            outs() << "Basic block: marked as exits dominator\n";
+        }
+    }
+}
+
 void markIfUseDominator(Instruction *inst, DominatorTree *DT)
 {
     for (Value::use_iterator iter = inst->use_begin(); iter != inst->use_end(); iter++)
     {
         Use *use_of_inst = &(*iter);
         Value *val = dyn_cast<Value>(inst);
-        if(DT->dominates(val, *use_of_inst))
-        {
-            LLVMContext &C = inst->getContext();
-            MDNode *N = MDNode::get(C, MDString::get(C, ""));
-            inst->setMetadata("use dominator", N);
-        }
+        if(!DT->dominates(val, *use_of_inst))
+            return;
     }
+    LLVMContext &C = inst->getContext();
+    MDNode *N = MDNode::get(C, MDString::get(C, ""));
+    inst->setMetadata("use dominator", N);
+    outs() << "Instruction: marked as use dominator\n";
+    return;
 }
 
 PreservedAnalyses LoopOpts::run (Loop &L, LoopAnalysisManager &LAM, 
                                     LoopStandardAnalysisResults &LAR, LPMUpdater &LU)
 {
-    //std::unordered_map<const Instruction*, bool> invariant_map;
     DominatorTree *DT = &LAR.DT;
     BasicBlock *root_DT = (DT->getRootNode())->getBlock();
-    SmallVector<BasicBlock*> exiting_blocks;
-    
-    /*
-    for (auto i = root_DT->begin(); i != root_DT->end(); i++)
-    {
-        Instruction *inst = dyn_cast<Instruction>(i);
-        outs() << *inst << "\n";
-    }
-    */
     
     outs() << "Pre-header: " << *(L.getLoopPreheader()) << "\n";
     outs() << "Header: " << *(L.getHeader()) << "\n";
@@ -76,19 +101,13 @@ PreservedAnalyses LoopOpts::run (Loop &L, LoopAnalysisManager &LAM,
     for (auto BI = L.block_begin(); BI != L.block_end(); ++BI)
     {
         BasicBlock *BB = *BI;
-        if (L.isLoopExiting(BB))
-            exiting_blocks.push_back(BB);
         outs() << "Basic block: " << *BB << "\n";
         for (auto i = BB->begin(); i != BB->end(); i++)
         {
-            // const_cast translate a const object into a non constant one
-            // in this case const Instruction into Instruction.
             Instruction *inst = dyn_cast<Instruction>(i);
             outs() << "Instruction: " << *inst << "\n";
             if (isLoopInvariant(inst, Loop))
-            {
-                //invariant_map[inst] = true;
-                
+            {   
                 LLVMContext &C = inst->getContext();
                 MDNode *N = MDNode::get(C, MDString::get(C, ""));
                 inst->setMetadata("invariant", N);
@@ -98,6 +117,8 @@ PreservedAnalyses LoopOpts::run (Loop &L, LoopAnalysisManager &LAM,
             markIfUseDominator(inst, DT);
         }
     }
+
+    markExitsDominatorBlocks(L, DT);
 
     return PreservedAnalyses::all();
 }
