@@ -74,6 +74,25 @@ void markExitsDominatorBlocks (Loop &L, DominatorTree *DT)
     }
 }
 
+std::vector<Use*> getUses (Instruction *inst)
+{
+    std::vector<Use*> uses_to_check;
+    for (Value::use_iterator iter = inst->use_begin(); iter != inst->use_end(); ++iter)
+    {
+        Use *use_of_inst = &(*iter);
+        Instruction *user_inst = dyn_cast<Instruction>(iter->getUser());
+        outs() << "Use: " << *(user_inst) << "\n";
+        if (isa<PHINode>(user_inst))
+        {
+            std::vector<Use*> res = getUses(user_inst);
+            uses_to_check.insert(uses_to_check.end(), res.begin(), res.end());
+        }
+        else
+            uses_to_check.push_back(use_of_inst);
+    }
+    return uses_to_check;
+};
+
 void markIfUseDominator (Instruction *inst, DominatorTree *DT)
 {
     std::function<std::vector<Use*>(Instruction*)> getUses = [&](Instruction *inst) -> std::vector<Use*>
@@ -109,6 +128,18 @@ void markIfUseDominator (Instruction *inst, DominatorTree *DT)
     inst->setMetadata(use_dominator, N);
     outs() << "Instruction: marked as use dominator\n";
     return;
+}
+
+bool isDead (Instruction *inst, Loop *L)
+{
+    std::vector<Use*> uses = getUses(inst);
+
+    for (Use *use : uses)
+    {
+        if (L->contains(use->getUser()))
+            return false;
+    }
+    return true;
 }
 
 void codeMotion (DomTreeNode *node_DT, BasicBlock *preheader)
