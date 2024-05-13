@@ -6,6 +6,7 @@ using namespace llvm;
 const std::string invariant_tag = "invariant";
 const std::string use_dominator = "use_dominator";
 const std::string exits_dominator = "exits_dominator";
+const std::string dead_inst = "dead";
 
 bool isAlreadyLoopInvariant (Instruction *inst)
 {
@@ -130,16 +131,35 @@ void markIfUseDominator (Instruction *inst, DominatorTree *DT)
     return;
 }
 
-bool isDead (Instruction *inst, Loop *L)
+bool markDeadInstructions (Loop *L)
 {
-    std::vector<Use*> uses = getUses(inst);
-
-    for (Use *use : uses)
+    for (auto BI = L->block_begin(); BI != L->block_end(); ++BI)
     {
-        if (L->contains(use->getUser()))
-            return false;
+        BasicBlock *BB = *BI;
+        for (BasicBlock::iterator i = BB->begin(); i != BB->end(); i++)
+        { 
+            Instruction *inst = dyn_cast<Instruction>(i);
+            LLVMContext &C = inst->getContext();
+            std::vector<Use*> uses = getUses(inst);
+            bool isDead = true;
+            for (Use *use : uses)
+            {
+                if (!L->contains(use->getUser()))
+                {
+                    isDead = false;
+                    break;
+                }
+            }
+
+            if (isDead = true)
+            {
+                MDNode *N = MDNode::get(C, MDString::get(C, ""));
+                inst->setMetadata(dead_inst, N);
+                outs() << "Instruction: marked as dead\n";
+            }
+            return true;
+        }
     }
-    return true;
 }
 
 void codeMotion (DomTreeNode *node_DT, BasicBlock *preheader)
