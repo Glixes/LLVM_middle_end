@@ -111,6 +111,13 @@ void markIfUseDominator (Instruction *inst, DominatorTree *DT)
     return;
 }
 
+
+void isDeadAtExit()
+{
+    ;
+}
+
+
 void codeMotion (DomTreeNode *node_DT, BasicBlock *preheader)
 {
     outs() << "1\n";
@@ -131,9 +138,15 @@ void codeMotion (DomTreeNode *node_DT, BasicBlock *preheader)
                 continue;
             outs() << "5\n";
             // move inst in preheader
+            BasicBlock::iterator next_inst = inst;
+            next_inst++;
+            Instruction *last_preheader_inst = &(*(preheader->getTerminator()));
+            outs() << "To be deleted inst " << *inst << "\n";
+            outs() << "Trying to insert after inst " << *last_preheader_inst << "\n";
             inst->removeFromParent();
-            Instruction *last_preheader_inst = &(*(preheader->rbegin()));
-            inst->insertAfter(last_preheader_inst);
+            inst->insertBefore(last_preheader_inst);
+            outs() << "Newly inserted inst " << *inst << "\n";
+            inst = next_inst;
         }
         outs() << "6\n";
     }
@@ -178,7 +191,7 @@ PreservedAnalyses LoopOpts::run (Loop &L, LoopAnalysisManager &LAM,
             if (isLoopInvariant(inst, Loop))
             {   
                 LLVMContext &C = inst->getContext();
-                MDNode *N = MDNode::get(C, MDString::get(C, ""));
+                MDNode *N = MDNode::get(C, MDString::get(C, "h"));
                 inst->setMetadata("invariant", N);
                 
                 outs() << "Loop invariant instruction detected: " << *inst << "\n";
