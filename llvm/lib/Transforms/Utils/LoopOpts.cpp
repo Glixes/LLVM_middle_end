@@ -159,9 +159,9 @@ void markDeadInstructions (Loop *L)
                 inst->setMetadata(dead_inst, N);
                 outs() << "Instruction: marked as dead\n";
             }
-            return;
         }
     }
+    return;
 }
 
 
