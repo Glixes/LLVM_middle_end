@@ -3,10 +3,18 @@
 
 using namespace llvm;
 
+
 const std::string invariant_tag = "invariant";
 const std::string use_dominator = "use_dominator";
 const std::string exits_dominator = "exits_dominator";
 const std::string dead_inst = "dead";
+SmallVector<std::string> tags = {invariant_tag, use_dominator, exits_dominator, dead_inst};
+
+void clearMetadata (Instruction *inst) 
+{
+    for (auto type: tags)
+        inst->setMetadata(type, NULL);
+}
 
 bool isAlreadyLoopInvariant (Instruction *inst)
 {
@@ -162,8 +170,10 @@ bool markDeadInstructions (Loop *L)
     }
 }
 
+
 void codeMotion (DomTreeNode *node_DT, BasicBlock *preheader)
 {
+    SmallVector<Instruction*> toBeMoved;
     outs() << "1\n";
     if (!node_DT)
         return;
@@ -171,25 +181,32 @@ void codeMotion (DomTreeNode *node_DT, BasicBlock *preheader)
     outs() << "BB : " << *node << "\n";
     outs() << "2\n";
     
-    if (node->getTerminator()->getMetadata(exits_dominator))
+    outs() << "3\n";
+    for (auto inst = node->begin(); inst != node->end(); inst++)
     {
-        outs() << "3\n";
-        for (auto inst = node->begin(); inst != node->end(); inst++)
-        {
-            outs() << *inst << "\n";
-            outs() << "4\n";
-            if(!inst->getMetadata(use_dominator) || !inst->getMetadata(invariant_tag))
-                continue;
-            outs() << "5\n";
-            // move inst in preheader
-            inst->removeFromParent();
-            Instruction *last_preheader_inst = &(*(preheader->rbegin()));
-            inst->insertAfter(last_preheader_inst);
-        }
-        outs() << "6\n";
+        outs() << *inst << "\n";
+        outs() << "4\n";
+        bool move = ((!inst->getMetadata(dead_inst) && !node->getTerminator()->getMetadata(exits_dominator)) || !inst->getMetadata(use_dominator) || !inst->getMetadata(invariant_tag));
+        clearMetadata(&(*inst));
+        if (move)
+            continue;
+        toBeMoved.push_back(&(*inst));
+        outs() << "5\n";   
     }
+    outs() << "6\n";
 
     outs() << "7\n";
+
+    Instruction *last_preheader_inst = &(*(preheader->getTerminator()));
+
+    for (auto inst: toBeMoved){
+        // move inst in preheader
+        outs() << "To be deleted inst " << *inst << "\n";
+        outs() << "Trying to insert before inst " << *last_preheader_inst << "\n";
+        inst->removeFromParent();
+        inst->insertBefore(last_preheader_inst);
+        outs() << "Newly inserted inst " << *inst << "\n";
+    }
 
     for (DomTreeNode *child : node_DT->children())
     {
@@ -199,12 +216,6 @@ void codeMotion (DomTreeNode *node_DT, BasicBlock *preheader)
     outs() << "8\n";
 }
 
-void clearMetadata (Instruction *inst) 
-{
-    std::vector<std::string> metadataList;
-    for (auto type: metadataList)
-        inst->setMetadata(type, NULL);
-}
 
 PreservedAnalyses LoopOpts::run (Loop &L, LoopAnalysisManager &LAM, 
                                     LoopStandardAnalysisResults &LAR, LPMUpdater &LU)
@@ -229,12 +240,13 @@ PreservedAnalyses LoopOpts::run (Loop &L, LoopAnalysisManager &LAM,
             if (isLoopInvariant(inst, Loop))
             {   
                 LLVMContext &C = inst->getContext();
-                MDNode *N = MDNode::get(C, MDString::get(C, ""));
+                MDNode *N = MDNode::get(C, MDString::get(C, "h"));
                 inst->setMetadata("invariant", N);
                 
                 outs() << "Loop invariant instruction detected: " << *inst << "\n";
             }
             markIfUseDominator(inst, DT);
+            //markDead(inst,L);
         }
     }
 
