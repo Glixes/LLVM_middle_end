@@ -108,7 +108,7 @@ std::vector<Use*> getUses (Instruction *inst)
     return uses_to_check;
 }
 
-void markIfUseDominator (Instruction *inst, DominatorTree *DT)
+void markIfUseDominator (Instruction *inst, DominatorTree *DT, Loop *L)
 {
     std::vector<Use*> uses = getUses(inst);
     Value *inst_val = dyn_cast<Value>(inst);
@@ -116,7 +116,7 @@ void markIfUseDominator (Instruction *inst, DominatorTree *DT)
     for (Use *use : uses)
     {
         outs() << DT->dominates(inst_val, *use) << "\n";
-        if (!DT->dominates(inst_val, *use))
+        if (L->contains(dyn_cast<Instruction>(use->getUser())) && !DT->dominates(inst_val, *use))
             return;
     }
     
@@ -206,7 +206,7 @@ PreservedAnalyses LoopOpts::run (Loop &L, LoopAnalysisManager &LAM,
             outs() << "Instruction: " << *inst << "\n";
             
             markIfLoopInvariant(inst, &L);
-            markIfUseDominator(inst, DT);
+            markIfUseDominator(inst, DT, &L);
             markIfDeadInstruction(inst, &L);
         }
     }
