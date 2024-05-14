@@ -3,15 +3,14 @@
 
 using namespace llvm;
 
-
 const std::string invariant_tag = "invariant";
 const std::string use_dominator = "use_dominator";
 const std::string exits_dominator = "exits_dominator";
 const std::string dead_inst = "dead";
-SmallVector<std::string> tags = {invariant_tag, use_dominator, exits_dominator, dead_inst};
 
 void clearMetadata (Instruction *inst) 
 {
+    SmallVector<std::string> tags = {invariant_tag, use_dominator, exits_dominator, dead_inst};
     for (auto type: tags)
         inst->setMetadata(type, NULL);
 }
@@ -38,13 +37,20 @@ bool isLoopInvariant (Value *v, Loop* L)
     return false;
 }
 
-bool isLoopInvariant (const Instruction *inst, Loop* L)
+void markIfLoopInvariant (Instruction *inst, Loop* L)
 {
     Value *val1 = inst->getOperand(0);
     Value *val2 = inst->getOperand(1);
     outs() << "Analyzing operands: " << *val1 << ", " << *val2 << "\n";
     
-    return isLoopInvariant(val1, L) && isLoopInvariant(val2, L);
+    if (!isLoopInvariant(val1, L) || !isLoopInvariant(val2, L))
+        return;
+
+    LLVMContext &C = inst->getContext();
+    MDNode *N = MDNode::get(C, MDString::get(C, ""));
+    inst->setMetadata(invariant_tag, N);
+    outs() << "Loop invariant instruction detected: " << *inst << "\n";
+    return;
 }
 
 void markExitsDominatorBlocks (Loop &L, DominatorTree *DT)
@@ -81,6 +87,7 @@ void markExitsDominatorBlocks (Loop &L, DominatorTree *DT)
             outs() << "Basic block: marked as exits dominator\n";
         }
     }
+    return;
 }
 
 std::vector<Use*> getUses (Instruction *inst)
@@ -100,29 +107,10 @@ std::vector<Use*> getUses (Instruction *inst)
             uses_to_check.push_back(use_of_inst);
     }
     return uses_to_check;
-};
+}
 
 void markIfUseDominator (Instruction *inst, DominatorTree *DT)
 {
-    std::function<std::vector<Use*>(Instruction*)> getUses = [&](Instruction *inst) -> std::vector<Use*>
-    {
-        std::vector<Use*> uses_to_check;
-        for (Value::use_iterator iter = inst->use_begin(); iter != inst->use_end(); ++iter)
-        {
-            Use *use_of_inst = &(*iter);
-            Instruction *user_inst = dyn_cast<Instruction>(iter->getUser());
-            outs() << "Use: " << *(user_inst) << "\n";
-            if (isa<PHINode>(user_inst))
-            {
-                std::vector<Use*> res = getUses(user_inst);
-                uses_to_check.insert(uses_to_check.end(), res.begin(), res.end());
-            }
-            else
-                uses_to_check.push_back(use_of_inst);
-        }
-        return uses_to_check;
-    };
-
     std::vector<Use*> uses = getUses(inst);
     Value *inst_val = dyn_cast<Value>(inst);
 
@@ -139,7 +127,7 @@ void markIfUseDominator (Instruction *inst, DominatorTree *DT)
     return;
 }
 
-bool markDeadInstructions (Loop *L)
+void markDeadInstructions (Loop *L)
 {
     for (auto BI = L->block_begin(); BI != L->block_end(); ++BI)
     {
@@ -152,20 +140,26 @@ bool markDeadInstructions (Loop *L)
             bool isDead = true;
             for (Use *use : uses)
             {
-                if (!L->contains(use->getUser()))
+                outs() << "1\n";
+                User *user = use->getUser();
+                outs() << "2\n";
+                Instruction *user_inst = dyn_cast<Instruction>(user);
+                outs() << "3\n";
+                if (!L->contains(user_inst))
                 {
+                    outs() << "sono dentro all'if\n";
                     isDead = false;
                     break;
                 }
             }
 
-            if (isDead = true)
+            if (isDead == true)
             {
                 MDNode *N = MDNode::get(C, MDString::get(C, ""));
                 inst->setMetadata(dead_inst, N);
                 outs() << "Instruction: marked as dead\n";
             }
-            return true;
+            return;
         }
     }
 }
@@ -173,33 +167,28 @@ bool markDeadInstructions (Loop *L)
 
 void codeMotion (DomTreeNode *node_DT, BasicBlock *preheader)
 {
-    SmallVector<Instruction*> toBeMoved;
-    outs() << "1\n";
+    SmallVector<Instruction*> to_be_moved;
     if (!node_DT)
         return;
     BasicBlock *node = node_DT->getBlock();
     outs() << "BB : " << *node << "\n";
-    outs() << "2\n";
     
-    outs() << "3\n";
-    for (auto inst = node->begin(); inst != node->end(); inst++)
+    for (BasicBlock::iterator inst = node->begin(); inst != node->end(); inst++)
     {
         outs() << *inst << "\n";
-        outs() << "4\n";
-        bool move = ((!inst->getMetadata(dead_inst) && !node->getTerminator()->getMetadata(exits_dominator)) || !inst->getMetadata(use_dominator) || !inst->getMetadata(invariant_tag));
+        // if at least one of the three main conditions is false, then the instruction must not be moved in preheader block
+        bool not_move = ((!inst->getMetadata(dead_inst) && !node->getTerminator()->getMetadata(exits_dominator)) 
+            || !inst->getMetadata(use_dominator) || !inst->getMetadata(invariant_tag));
         clearMetadata(&(*inst));
-        if (move)
+        if (not_move)
             continue;
-        toBeMoved.push_back(&(*inst));
-        outs() << "5\n";   
+        to_be_moved.push_back(&(*inst));
     }
-    outs() << "6\n";
-
-    outs() << "7\n";
 
     Instruction *last_preheader_inst = &(*(preheader->getTerminator()));
 
-    for (auto inst: toBeMoved){
+    for (auto inst: to_be_moved)
+    {
         // move inst in preheader
         outs() << "To be deleted inst " << *inst << "\n";
         outs() << "Trying to insert before inst " << *last_preheader_inst << "\n";
@@ -212,8 +201,7 @@ void codeMotion (DomTreeNode *node_DT, BasicBlock *preheader)
     {
         codeMotion(child, preheader);
     }
-
-    outs() << "8\n";
+    return;
 }
 
 
@@ -221,12 +209,9 @@ PreservedAnalyses LoopOpts::run (Loop &L, LoopAnalysisManager &LAM,
                                     LoopStandardAnalysisResults &LAR, LPMUpdater &LU)
 {
     DominatorTree *DT = &LAR.DT;
-    //BasicBlock *root_DT = (DT->getRootNode())->getBlock();
     
     outs() << "Pre-header: " << *(L.getLoopPreheader()) << "\n";
     outs() << "Header: " << *(L.getHeader()) << "\n";
-    // outs() << L.getBlocks() << "\n";
-    Loop *Loop = &L;
     for (auto BI = L.block_begin(); BI != L.block_end(); ++BI)
     {
         BasicBlock *BB = *BI;
@@ -237,20 +222,14 @@ PreservedAnalyses LoopOpts::run (Loop &L, LoopAnalysisManager &LAM,
             if (!inst->isBinaryOp())
                 continue;
             outs() << "Instruction: " << *inst << "\n";
-            if (isLoopInvariant(inst, Loop))
-            {   
-                LLVMContext &C = inst->getContext();
-                MDNode *N = MDNode::get(C, MDString::get(C, "h"));
-                inst->setMetadata("invariant", N);
-                
-                outs() << "Loop invariant instruction detected: " << *inst << "\n";
-            }
+            
+            markIfLoopInvariant(inst, &L);
             markIfUseDominator(inst, DT);
-            //markDead(inst,L);
         }
     }
 
     markExitsDominatorBlocks(L, DT);
+    markDeadInstructions(&L);
 
     codeMotion(DT->getRootNode(), L.getLoopPreheader());
 
