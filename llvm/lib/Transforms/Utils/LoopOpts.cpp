@@ -1,6 +1,8 @@
 #include "llvm/Transforms/Utils/LoopOpts.h"
 #include "llvm/IR/Dominators.h"
 
+#define DEBUG
+
 using namespace llvm;
 
 const std::string invariant_tag = "invariant";
@@ -22,45 +24,88 @@ void applyMetadata (Instruction *inst, const std::string tag)
     inst->setMetadata(tag, N);
 }
 
+/**
+ * Check if instruction is already marked as Invariant.
+ * @param inst the instruction passed
+**/
 bool isAlreadyLoopInvariant (Instruction *inst)
 {
     return inst->getMetadata(invariant_tag);
 }
 
+/**
+ * @brief Check if the Value is LoopInvariant.
+ * 
+ * We define LoopInvariant a Value if verifies at least one of these conditions:
+ *  - It is a parameter of the function
+ *  - The relative Instruction is already marked as LoopInvariant
+ *  - Loop doesn't contain the relative instruction
+ * @param v
+ * @param L
+**/ 
 bool isLoopInvariant (Value *v, Loop* L)
 {
-    Instruction *v_inst = dyn_cast<Instruction>(v);
-    // v_inst is NULL when v is an argument of the function
+    //NULL when v is an argument of the function
+    Instruction *v_inst = dyn_cast<Instruction>(v); 
+    
     if (!v_inst || isAlreadyLoopInvariant(v_inst) || !L->contains(v_inst))
         return true;
     
-    outs() << "Is value " << *v_inst << " invariant?\n";
-    
+    #ifdef DEBUG
+        outs() << "[isLoopInvariant]\tAnalyzing Value: " << *v_inst << "\n";
+    #endif
+
     Constant *c_inst = dyn_cast<Constant>(v);
-    outs() << "Is the value " << c_inst << " constant?\n";
-    if (c_inst)
+
+    if (c_inst){
+        
+        #ifdef DEBUG
+            outs() << "[isLoopInvariant]\t\tValue resolved to constant: " << *c_inst <<"\n";
+        #endif
+        
         return true;
+    }
     
     return false;
 }
+
+/**
+ * @brief Marks with a metadata an Instruction if it is LoopInvariant. 
+ * @param inst
+ * @param L
+*/
 
 void markIfLoopInvariant (Instruction *inst, Loop* L)
 {
     Value *val1 = inst->getOperand(0);
     Value *val2 = inst->getOperand(1);
-    outs() << "Analyzing operands: " << *val1 << ", " << *val2 << "\n";
+
+    #ifdef DEBUG
+        outs() << "[markIfLoopInvariant]\tAnalyzing Instruction: " << *inst << "\n";
+        outs() << "[markIfLoopInvariant]\t\tAnalyzing operands: " << *val1 << ", " << *val2 << "\n";
+    #endif
     
     if (!isLoopInvariant(val1, L) || !isLoopInvariant(val2, L))
         return;
 
     applyMetadata(inst, invariant_tag);
-    outs() << "Loop invariant instruction detected: " << *inst << "\n";
+
+    #ifdef DEBUG
+        outs() << "[markIfLoopInvariant]\tLoop invariant instruction detected: " << *inst << "\n";
+    #endif
+
     return;
 }
 
+/**
+ * @brief Marks with the metadata all the blocks in the loop as exit dominator. 
+ * @param L
+ * @param DT
+*/
 void markExitsDominatorBlocks (Loop &L, DominatorTree *DT)
 {
     SmallVector<BasicBlock*> exiting_blocks;
+
     for (auto BI = L.block_begin(); BI != L.block_end(); ++BI)
     {
         BasicBlock *BB = *BI;
@@ -71,7 +116,10 @@ void markExitsDominatorBlocks (Loop &L, DominatorTree *DT)
     for (auto BI = L.block_begin(); BI != L.block_end(); ++BI)
     {
         BasicBlock *BB = *BI;
-        outs() << "Basic block: " << *BB << "\n";
+        #ifdef DEBUG
+            outs() << "[markExitsDominatorBlocks]\tAnalyzing block: " << *BI << "\n";
+        #endif
+
 
         bool is_dominator = true;
         for (auto EB: exiting_blocks)
@@ -83,11 +131,21 @@ void markExitsDominatorBlocks (Loop &L, DominatorTree *DT)
             }
         }
 
-        if (is_dominator)
+        if (is_dominator){
+            #ifdef DEBUG
+                outs() << "[markExitsDominatorBlocks]\t\tThis Block is dominator" << "\n";
+            #endif
+
             applyMetadata(BB->getTerminator(), exits_dominator);
+        }
     }
     return;
 }
+
+/**
+ * @brief Recursive function. Get Uses for a given Instruction.
+ * @param inst
+*/
 
 std::vector<Use*> getUses (Instruction *inst)
 {
@@ -96,7 +154,12 @@ std::vector<Use*> getUses (Instruction *inst)
     {
         Use *use_of_inst = &(*iter);
         Instruction *user_inst = dyn_cast<Instruction>(iter->getUser());
-        outs() << "Use: " << *(user_inst) << "\n";
+        
+        #ifdef DEBUG
+            outs() << "[getUses]\tFound User: " << *(user_inst) << " of " << *inst << "\n";
+        #endif
+        
+        // Given that a PHINode instruction stores different expressions connected to a variable; in order to obtain the uses of the original Instruction it is needed to obtain the uses of the PHI Instruction (this operation can be repeated multiple times)  
         if (isa<PHINode>(user_inst))
         {
             std::vector<Use*> res = getUses(user_inst);
@@ -108,6 +171,10 @@ std::vector<Use*> getUses (Instruction *inst)
     return uses_to_check;
 }
 
+/**
+ * 
+*/
+
 void markIfUseDominator (Instruction *inst, DominatorTree *DT, Loop *L)
 {
     std::vector<Use*> uses = getUses(inst);
@@ -115,13 +182,20 @@ void markIfUseDominator (Instruction *inst, DominatorTree *DT, Loop *L)
 
     for (Use *use : uses)
     {
-        outs() << DT->dominates(inst_val, *use) << "\n";
+        #ifdef DEBUG
+        outs() << "[markIfUseDominator]\t"<< *inst_val << " is "<< ((DT->dominates(inst_val, *use)) ? "" : "not") << " a dominator of " << *use <<"\n";
+        #endif
+
         if (L->contains(dyn_cast<Instruction>(use->getUser())) && !DT->dominates(inst_val, *use))
             return;
     }
     
     applyMetadata(inst, use_dominator);
-    outs() << "Instruction: marked as use dominator\n";
+
+    #ifdef DEBUG
+        outs() << "[markIfUseDominator]\tInstruction "<<*inst<<" marked as use dominator\n";
+    #endif
+
     return;
 }
 
