@@ -10,6 +10,10 @@ const std::string use_dominator = "use_dominator";
 const std::string exits_dominator = "exits_dominator";
 const std::string dead_tag = "dead";
 
+/** @brief Remove all the previously applied metadatas.
+ * 
+ * @param inst instruction
+*/
 void clearMetadata (Instruction *inst) 
 {
     SmallVector<std::string> tags = {invariant_tag, use_dominator, exits_dominator, dead_tag};
@@ -17,6 +21,11 @@ void clearMetadata (Instruction *inst)
         inst->setMetadata(type, NULL);
 }
 
+/** @brief Apply a specified metadata to an instruction.
+ * 
+ * @param inst instruction
+ * @param tag tag to apply
+*/
 void applyMetadata (Instruction *inst, const std::string tag)
 {
     LLVMContext &C = inst->getContext();
@@ -24,25 +33,24 @@ void applyMetadata (Instruction *inst, const std::string tag)
     inst->setMetadata(tag, N);
 }
 
-/**
- * Check if instruction is already marked as Invariant.
- * @param inst the instruction passed
-**/
+/** @brief Check if instruction is already marked as Invariant.
+ * 
+ * @param inst checked instruction
+*/
 bool isAlreadyLoopInvariant (Instruction *inst)
 {
     return inst->getMetadata(invariant_tag);
 }
 
-/**
- * @brief Check if the Value is LoopInvariant.
- * 
- * We define LoopInvariant a Value if verifies at least one of these conditions:
+/** @brief Check if the Value is LoopInvariant.
+ * A value is defined loop invariant if verifies at least one of these conditions:
  *  - It is a parameter of the function
  *  - The relative Instruction is already marked as LoopInvariant
- *  - Loop doesn't contain the relative instruction
- * @param v
- * @param L
-**/ 
+ *  - Loop doesn not contain the relative instruction
+ * 
+ * @param v value
+ * @param L loop
+*/ 
 bool isLoopInvariant (Value *v, Loop* L)
 {
     //NULL when v is an argument of the function
@@ -69,12 +77,11 @@ bool isLoopInvariant (Value *v, Loop* L)
     return false;
 }
 
-/**
- * @brief Marks with a metadata an Instruction if it is LoopInvariant. 
- * @param inst
- * @param L
+/** @brief Mark with a metadata an Instruction if it is LoopInvariant. 
+ * 
+ * @param inst instruction
+ * @param L loop
 */
-
 void markIfLoopInvariant (Instruction *inst, Loop* L)
 {
     Value *val1 = inst->getOperand(0);
@@ -97,10 +104,10 @@ void markIfLoopInvariant (Instruction *inst, Loop* L)
     return;
 }
 
-/**
- * @brief Marks with the metadata all the blocks in the loop as exit dominator. 
- * @param L
- * @param DT
+/** @brief Mark with a metadata all the blocks in the loop which dominate the exits. 
+ * 
+ * @param L Loop
+ * @param DT dominator tree
 */
 void markExitsDominatorBlocks (Loop &L, DominatorTree *DT)
 {
@@ -142,11 +149,10 @@ void markExitsDominatorBlocks (Loop &L, DominatorTree *DT)
     return;
 }
 
-/**
- * @brief Recursive function. Get Uses for a given Instruction.
- * @param inst
+/** @brief Recursively get Uses for a given Instruction.
+ * 
+ * @param inst instruction
 */
-
 std::vector<Use*> getUses (Instruction *inst)
 {
     std::vector<Use*> uses_to_check;
@@ -159,7 +165,11 @@ std::vector<Use*> getUses (Instruction *inst)
             outs() << "[getUses]\tFound User: " << *(user_inst) << " of " << *inst << "\n";
         #endif
         
-        // Given that a PHINode instruction stores different expressions connected to a variable; in order to obtain the uses of the original Instruction it is needed to obtain the uses of the PHI Instruction (this operation can be repeated multiple times)  
+        /*
+            Given that a PHINode instruction stores different expressions connected to a variable; 
+            in order to obtain the uses of the original Instruction it is needed to obtain the uses of the PHI 
+            Instruction (this operation can be repeated multiple times).
+        */  
         if (isa<PHINode>(user_inst))
         {
             std::vector<Use*> res = getUses(user_inst);
@@ -171,10 +181,12 @@ std::vector<Use*> getUses (Instruction *inst)
     return uses_to_check;
 }
 
-/**
+/** @brief Mark the give instruction with a metadata if it dominates their uses.
  * 
+ * @param inst instruction
+ * @param DT dominator tree
+ * @param L loop
 */
-
 void markIfUseDominator (Instruction *inst, DominatorTree *DT, Loop *L)
 {
     std::vector<Use*> uses = getUses(inst);
@@ -199,6 +211,12 @@ void markIfUseDominator (Instruction *inst, DominatorTree *DT, Loop *L)
     return;
 }
 
+/** @brief Mark the give instruction as dead if it is considered such outside the loop.
+ * An instruction is dead in a fixed point p if it is never used from that point onwards.
+ * 
+ * @param inst instruction
+ * @param L loop
+*/
 void markIfDeadInstruction (Instruction *inst, Loop *L)
 {
     std::vector<Use*> uses = getUses(inst);
@@ -219,23 +237,37 @@ void markIfDeadInstruction (Instruction *inst, Loop *L)
     return;
 }
 
-
+/** @brief Move the marked instructions outside the loop.
+ * Execute a DFS on the dominator tree in order to move in the preheader the instructions which are marked
+ * as invariant, use dominators, and exits dominators or deads. 
+ * The dfs is exploited to maintain the relative order of the moved instructions.
+ * 
+ * @param node_DT dominator tree node
+ * @param preheader preheader of the loop
+*/
 void codeMotion (DomTreeNode *node_DT, BasicBlock *preheader)
 {
     SmallVector<Instruction*> to_be_moved;
     if (!node_DT)
         return;
     BasicBlock *node = node_DT->getBlock();
-    outs() << "BB : " << *node << "\n";
+
+    #ifdef DEBUG
+        outs() << "[codeMotion]\tBB : " << *node << "\n";
+    #endif
     
     for (BasicBlock::iterator inst = node->begin(); inst != node->end(); inst++)
     {
-        outs() << *inst << "\n";
+        #ifdef DEBUG
+            outs() << "[codeMotion]\t" << *inst << "\n";
+        #endif
         // if at least one of the three main conditions is false, then the instruction must not be moved in preheader block
         bool not_move = ((!inst->getMetadata(dead_tag) && !node->getTerminator()->getMetadata(exits_dominator)) 
             || !inst->getMetadata(use_dominator) || !inst->getMetadata(invariant_tag));
         clearMetadata(&(*inst));
-        outs() << not_move << "\n";
+        #ifdef DEBUG
+            outs() << "[codeMotion]\t" << not_move << "\n";
+        #endif
         if (not_move)
             continue;
         to_be_moved.push_back(&(*inst));
@@ -246,11 +278,15 @@ void codeMotion (DomTreeNode *node_DT, BasicBlock *preheader)
     for (auto inst: to_be_moved)
     {
         // move inst in preheader
-        outs() << "To be deleted inst " << *inst << "\n";
-        outs() << "Trying to insert before inst " << *last_preheader_inst << "\n";
+        #ifdef DEBUG
+            outs() << "[codeMotion]\t" << "To be deleted inst " << *inst << "\n";
+            outs() << "[codeMotion]\t" << "Trying to insert before inst " << *last_preheader_inst << "\n";
+        #endif
         inst->removeFromParent();
         inst->insertBefore(last_preheader_inst);
-        outs() << "Newly inserted inst " << *inst << "\n";
+        #ifdef DEBUG
+            outs() << "[codeMotion]\t" << "Newly inserted inst " << *inst << "\n";
+        #endif
     }
 
     for (DomTreeNode *child : node_DT->children())
@@ -266,18 +302,24 @@ PreservedAnalyses LoopOpts::run (Loop &L, LoopAnalysisManager &LAM,
 {
     DominatorTree *DT = &LAR.DT;
     
-    outs() << "Pre-header: " << *(L.getLoopPreheader()) << "\n";
-    outs() << "Header: " << *(L.getHeader()) << "\n";
+    #ifdef DEBUG
+        outs() << "[run]\tPre-header: " << *(L.getLoopPreheader()) << "\n";
+        outs() << "[run]\tHeader: " << *(L.getHeader()) << "\n";
+    #endif
     for (auto BI = L.block_begin(); BI != L.block_end(); ++BI)
     {
         BasicBlock *BB = *BI;
-        outs() << "Basic block: " << *BB << "\n";
+        #ifdef DEBUG
+            outs() << "[run]\tBasic block: " << *BB << "\n";
+        #endif
         for (auto i = BB->begin(); i != BB->end(); i++)
         {
             Instruction *inst = dyn_cast<Instruction>(i);
             if (!inst->isBinaryOp())
                 continue;
-            outs() << "Instruction: " << *inst << "\n";
+            #ifdef DEBUG
+                outs() << "[run]\tInstruction: " << *inst << "\n";
+            #endif
             
             markIfLoopInvariant(inst, &L);
             markIfUseDominator(inst, DT, &L);
