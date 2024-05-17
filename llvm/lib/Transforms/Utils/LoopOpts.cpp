@@ -247,11 +247,12 @@ void markIfDeadInstruction (Instruction *inst, Loop *L)
  * @param node_DT dominator tree node
  * @param preheader preheader of the loop
 */
-void codeMotion (DomTreeNode *node_DT, BasicBlock *preheader)
+bool codeMotion (DomTreeNode *node_DT, BasicBlock *preheader)
 {
+    bool code_changed = false;
     SmallVector<Instruction*> to_be_moved;
     if (!node_DT)
-        return;
+        return false;
     BasicBlock *node = node_DT->getBlock();
 
     #ifdef DEBUG
@@ -277,6 +278,8 @@ void codeMotion (DomTreeNode *node_DT, BasicBlock *preheader)
 
     Instruction *last_preheader_inst = &(*(preheader->getTerminator()));
 
+    code_changed = (to_be_moved.size() >= 1);
+
     for (auto inst: to_be_moved)
     {
         // move inst in preheader
@@ -293,9 +296,9 @@ void codeMotion (DomTreeNode *node_DT, BasicBlock *preheader)
 
     for (DomTreeNode *child : node_DT->children())
     {
-        codeMotion(child, preheader);
+        code_changed = codeMotion(child, preheader) || code_changed;
     }
-    return;
+    return code_changed;
 }
 
 
@@ -331,7 +334,7 @@ PreservedAnalyses LoopOpts::run (Loop &L, LoopAnalysisManager &LAM,
 
     markExitsDominatorBlocks(L, DT);
 
-    codeMotion(DT->getRootNode(), L.getLoopPreheader());
-
+    if (codeMotion(DT->getRootNode(), L.getLoopPreheader()))
+        return PreservedAnalyses::none();
     return PreservedAnalyses::all();
 }
