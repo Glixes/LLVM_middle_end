@@ -90,7 +90,6 @@ void markIfLoopInvariant (Instruction *inst, Loop* L)
     Value *val2 = inst->getOperand(1);
 
     #ifdef DEBUG
-        outs() << "[markIfLoopInvariant]\tAnalyzing Instruction: " << *inst << "\n";
         outs() << "[markIfLoopInvariant]\t\tAnalyzing operands: " << *val1 << ", " << *val2 << "\n";
     #endif
     
@@ -180,6 +179,7 @@ std::vector<Use*> getUses (Instruction *inst)
         else
             uses_to_check.push_back(use_of_inst);
     }
+    outs()<<"\n";
     return uses_to_check;
 }
 
@@ -197,7 +197,7 @@ void markIfUseDominator (Instruction *inst, DominatorTree *DT, Loop *L)
     for (Use *use : uses)
     {
         #ifdef DEBUG
-        outs() << "[markIfUseDominator]\t"<< *inst_val << " is "<< ((DT->dominates(inst_val, *use)) ? "" : "not") << " a dominator of " << *use <<"\n";
+        outs() << "[markIfUseDominator]\t"<< *inst_val << " is "<< ((DT->dominates(inst_val, *use)) ? "" : "not") << " a dominator of " << *(use->getUser()) <<"\n";
         #endif
 
         if (L->contains(dyn_cast<Instruction>(use->getUser())) && !DT->dominates(inst_val, *use))
@@ -269,7 +269,8 @@ bool codeMotion (DomTreeNode *node_DT, BasicBlock *preheader)
             || !inst->getMetadata(use_dominator) || !inst->getMetadata(invariant_tag));
         clearMetadata(&(*inst));
         #ifdef DEBUG
-            outs() << "[codeMotion]\t" << not_move << "\n";
+            if (not_move)
+                outs() << "[codeMotion]\t\tThe instruction is moved\n";
         #endif
         if (not_move)
             continue;
@@ -336,5 +337,9 @@ PreservedAnalyses LoopOpts::run (Loop &L, LoopAnalysisManager &LAM,
 
     if (codeMotion(DT->getRootNode(), L.getLoopPreheader()))
         return PreservedAnalyses::none();
+
+    #ifdef DEBUG
+        outs()<<"[run]\tNothing changed!"<<"\n";
+    #endif    
     return PreservedAnalyses::all();
 }
