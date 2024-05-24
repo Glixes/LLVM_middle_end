@@ -12,4 +12,3 @@ namespace llvm
     };
 } // namespace llvm
 #endif // LLVM_TRANSFORMS_LOCALOPTS_H
-
