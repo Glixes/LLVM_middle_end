@@ -1,8 +1,8 @@
 #include "llvm/Transforms/Utils/LoopFusion.h"
-#include "llvm/Transforms/Scalar/LoopPassM
 #include "llvm/Analysis/ScalarEvolution.h"
 #include <llvm/IR/Dominators.h>
 #include <llvm/Analysis/PostDominators.h>
+#include <llvm/Analysis/LoopInfo.h>
 
 using namespace llvm;
 
