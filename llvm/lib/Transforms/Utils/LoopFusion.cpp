@@ -1,6 +1,7 @@
 #include "llvm/Transforms/Utils/LoopFusion.h"
 #include "llvm/Transforms/Scalar/LoopPassManager.h"
-//#include <llvm/Analysis/LoopInfo.h>
+#include <llvm/IR/Dominators.h>
+#include <llvm/Analysis/PostDominators.h>
 
 using namespace llvm;
 
@@ -17,12 +18,19 @@ bool isAdjacent (Loop *l1, Loop *l2)
     return true;
 }
 
-
+bool isFlowEquivalent (Loop *l1, Loop *l2, DominatorTree *DT, PostDominatorTree *PDT)
+{
+    BasicBlock *B1 = l1->getHeader();
+    BasicBlock *B2 = l2->getHeader();
+    
+    return (DT->dominates(B1, B2) && PDT->dominates(B2, B1));
+}
 
 PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
 {
     LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
-    DominatorTree &DT = AM.getResult<LoopStandardAnalysisResults>().getDomTree();
+    DominatorTree &DT = AM.getResult<DominatorTreeAnalysis>(F);
+    PostDominatorTree &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
     for (Loop *L : LI)
     {
         outs() << *L << "\n"; 
