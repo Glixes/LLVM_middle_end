@@ -1,5 +1,6 @@
 #include "llvm/Transforms/Utils/LoopFusion.h"
-#include "llvm/Transforms/Scalar/LoopPassManager.h"
+#include "llvm/Transforms/Scalar/LoopPassM
+#include "llvm/Analysis/ScalarEvolution.h"
 #include <llvm/IR/Dominators.h>
 #include <llvm/Analysis/PostDominators.h>
 
@@ -18,6 +19,16 @@ bool isAdjacent (Loop *l1, Loop *l2)
     return true;
 }
 
+
+
+bool haveSameNumberIterations (Loop *l1, Loop *l2, ScalarEvolution SE)
+{
+    int c1 = SE.getSmallConstantMaxTripCount(l1);
+    int c2 = SE.getSmallConstantMaxTripCount(l2);
+    return (c1 == c2);
+}
+
+
 bool isFlowEquivalent (Loop *l1, Loop *l2, DominatorTree *DT, PostDominatorTree *PDT)
 {
     BasicBlock *B1 = l1->getHeader();
@@ -26,11 +37,15 @@ bool isFlowEquivalent (Loop *l1, Loop *l2, DominatorTree *DT, PostDominatorTree 
     return (DT->dominates(B1, B2) && PDT->dominates(B2, B1));
 }
 
+
 PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
 {
     LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
+
+    ScalarEvolution &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
     DominatorTree &DT = AM.getResult<DominatorTreeAnalysis>(F);
     PostDominatorTree &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
+
     for (Loop *L : LI)
     {
         outs() << *L << "\n"; 
