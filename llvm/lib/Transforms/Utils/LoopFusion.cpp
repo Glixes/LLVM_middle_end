@@ -20,11 +20,16 @@ bool isAdjacent (Loop *l1, Loop *l2)
 }
 
 
+int getNormalizedIterationsNumber (Loop *l, ScalarEvolution *SE)
+{
+    int iterations_number = SE->getSmallConstantMaxTripCount(l);
+    return (l->isGuarded() ? iterations_number++ : iterations_number);
+}
+
+
 bool haveSameNumberIterations (Loop *l1, Loop *l2, ScalarEvolution *SE)
 {
-    int c1 = SE->getSmallConstantMaxTripCount(l1);
-    int c2 = SE->getSmallConstantMaxTripCount(l2);
-    return (c1 == c2);
+    return getNormalizedIterationsNumber(l1, SE) == getNormalizedIterationsNumber(l2, SE);
 }
 
 
