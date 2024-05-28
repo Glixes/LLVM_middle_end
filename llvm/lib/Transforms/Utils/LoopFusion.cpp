@@ -42,7 +42,7 @@ bool areFlowEquivalent (Loop *l1, Loop *l2, DominatorTree *DT, PostDominatorTree
 }
 
 
-bool areDistanceIndependent (Loop *l1, Loop *l2)
+bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution *SE)
 {
     std::unordered_map<Value*, std::vector<std::vector<int, int>>> index_map;
     for (auto BI = l1->block_begin(); BI != l2->block_end(); ++BI)
@@ -52,8 +52,16 @@ bool areDistanceIndependent (Loop *l1, Loop *l2)
         {
             Instruction *inst = dyn_cast<Instruction>(i);
             //index_map[dyn_cast<Value>(inst)].push_back()
+            GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(inst);
+
+            const SCEV *S = SE->getSCEV(gep);
+            Value *Ptr0 = getLoadStorePointerOperand(inst);
+
+            const SCEV *SCEVPtr0 = SE->getSCEVAtScope(Ptr0, l1);
+            outs() << *SCEVPtr0 << "\n";
         }
     }
+    return true;
 }
 
 
@@ -90,7 +98,7 @@ PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
     std::unordered_map<unsigned, Loop*> last_loop_at_level;
     last_loop_at_level[loops_forest[0]->getLoopDepth()] = loops_forest[0];
 
-    for (int i = 1; i < loops_forest.size(); i++)
+    for (size_t i = 1; i < loops_forest.size(); i++)
     {
         unsigned loop_depth = loops_forest[i]->getLoopDepth();
         Loop *l1 = last_loop_at_level[loop_depth];
@@ -107,7 +115,7 @@ PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
             if (areAdjacent(l1, l2) && 
                 haveSameNumberIterations(l1, l2, &SE) && 
                 areFlowEquivalent(l1, l2, &DT, &PDT) && 
-                areDistanceIndependent(l1, l2))
+                areDistanceIndependent(l1, l2, &SE))
             {
                 // Loop Fusion
                 continue;
