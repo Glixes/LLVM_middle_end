@@ -6,7 +6,7 @@
 
 using namespace llvm;
 
-bool isAdjacent (Loop *l1, Loop *l2)
+bool areAdjacent (Loop *l1, Loop *l2)
 {
     // check for all the exiting blocks of l1
     SmallVector<BasicBlock*, 4> exit_blocks;
@@ -33,7 +33,7 @@ bool haveSameNumberIterations (Loop *l1, Loop *l2, ScalarEvolution *SE)
 }
 
 
-bool isFlowEquivalent (Loop *l1, Loop *l2, DominatorTree *DT, PostDominatorTree *PDT)
+bool areFlowEquivalent (Loop *l1, Loop *l2, DominatorTree *DT, PostDominatorTree *PDT)
 {
     BasicBlock *B1 = l1->getHeader();
     BasicBlock *B2 = l2->getHeader();
@@ -78,14 +78,45 @@ Value *getBaseAddress (Instruction *inst)
 PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
 {
     LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
-
     ScalarEvolution &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
     DominatorTree &DT = AM.getResult<DominatorTreeAnalysis>(F);
     PostDominatorTree &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
 
-    for (Loop *L : LI)
+    SmallVector<Loop *, 4> loops_forest = LI.getLoopsInPreorder();
+
+    if (loops_forest.size() <= 1)
+        return PreservedAnalyses::all();
+
+    std::unordered_map<unsigned, Loop*> last_loop_at_level;
+    last_loop_at_level[loops_forest[0]->getLoopDepth()] = loops_forest[0];
+
+    for (int i = 1; i < loops_forest.size(); i++)
     {
-        outs() << *L << "\n"; 
+        unsigned loop_depth = loops_forest[i]->getLoopDepth();
+        Loop *l1 = last_loop_at_level[loop_depth];
+        Loop *l2 = loops_forest[i];
+
+        // check whether l1 exists, i.e. there is a loop at the current loop level that has been visited before
+        // check for the same parent
+        if (l1 && l1->getParentLoop() == l2->getParentLoop())
+        {
+            /*
+            Expoliting the logical short-circuit, as soon as one of th functions returns false, 
+            the others remaining checks are not executed and the if statement condition become false.
+            */ 
+            if (areAdjacent(l1, l2) && 
+                haveSameNumberIterations(l1, l2, &SE) && 
+                areFlowEquivalent(l1, l2, &DT, &PDT) && 
+                areDistanceIndependent(l1, l2))
+            {
+                // Loop Fusion
+                continue;
+            }
+        }
+        
+        last_loop_at_level[loop_depth] = loops_forest[i];
+        //(A(DE(F(H)G))BC(IJ(L(O)MN)K))
+        // ADEFHGBCIJLOMNK
     }
 
     return PreservedAnalyses::all();
