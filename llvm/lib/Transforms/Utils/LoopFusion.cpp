@@ -3,6 +3,7 @@
 #include <llvm/IR/Dominators.h>
 #include <llvm/Analysis/PostDominators.h>
 #include <llvm/Analysis/LoopInfo.h>
+#include <llvm/Analysis/DependenceAnalysis.h>
 
 using namespace llvm;
 
@@ -42,9 +43,21 @@ bool areFlowEquivalent (Loop *l1, Loop *l2, DominatorTree *DT, PostDominatorTree
 }
 
 
+bool areDistanceIndependent (const SCEV *stride, const SCEV *c1, const SCEV *c2, ScalarEvolution *SE)
+{
+    const SCEV *delta = SE->getMinusSCEV(c1, c2);
+
+    if (isa<SCEVConstant>(*delta) && isa<SCEVConstant>(*stride))
+    {
+        // get dependece distance and return true if it is positive, otherwise return false
+        //SE->isKnownPositive()
+    }
+}
+
+
 bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution *SE)
 {
-    std::unordered_map<Value*, std::vector<std::vector<int, int>>> index_map;
+    //std::unordered_map<Value*, std::vector<std::vector<int, int>>> index_map;
     for (auto BI = l1->block_begin(); BI != l2->block_end(); ++BI)
     {
         BasicBlock *BB = *BI;
@@ -123,8 +136,6 @@ PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
         }
         
         last_loop_at_level[loop_depth] = loops_forest[i];
-        //(A(DE(F(H)G))BC(IJ(L(O)MN)K))
-        // ADEFHGBCIJLOMNK
     }
 
     return PreservedAnalyses::all();
