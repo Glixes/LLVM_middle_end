@@ -4,7 +4,7 @@
 #include <llvm/IR/Dominators.h>
 #include <llvm/Analysis/PostDominators.h>
 #include <llvm/Analysis/LoopInfo.h>
-#include <llvm/Analysis/DependenceAnalysis.h>
+#include <llvm/Analysis/ScalarEvolutionExpressions.h>
 
 using namespace llvm;
 
@@ -43,7 +43,7 @@ bool areFlowEquivalent (Loop *l1, Loop *l2, DominatorTree *DT, PostDominatorTree
     return (DT->dominates(B1, B2) && PDT->dominates(B2, B1));
 }
 
-
+/*
 bool areDistanceIndependent (const SCEV *stride, const SCEV *c1, const SCEV *c2, ScalarEvolution *SE)
 {
     const SCEV *delta = SE->getMinusSCEV(c1, c2);
@@ -54,14 +54,17 @@ bool areDistanceIndependent (const SCEV *stride, const SCEV *c1, const SCEV *c2,
         return SE->isKnownPositive(delta);
     }
 }
-
+*/
 
 bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE)
 {
+    outs() << "1\n";
     // we only analyze loops in simplified form, so with a single entry and a single exit
-    if (!l1->isCanonical(SE) || !l2->isCanonical(SE))
+    if (!l1->isLoopSimplifyForm() || !l2->isLoopSimplifyForm())
         return false;
     
+    outs() << "2\n";
+
     // get all the loads and stores
     std::vector<Value*> loadsStores1;
     std::vector<Value*> loadsStores2;
@@ -79,9 +82,9 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE)
             loadsStores1.push_back(ls);
         }
     }
-
+    outs() << "3\n";
     
-    for (auto BI = l1->block_begin(); BI != l2->block_end(); ++BI)
+    for (auto BI = l2->block_begin(); BI != l2->block_end(); ++BI)
     {
         BasicBlock *BB = *BI;
         for (auto i = BB->begin(); i != BB->end(); i++)
@@ -95,7 +98,7 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE)
             loadsStores2.push_back(ls);
         }
     }
-
+    outs() << "4\n";
     ICmpInst::Predicate Pred = ICmpInst::ICMP_SGE;
 
     for (auto val1: loadsStores1){
