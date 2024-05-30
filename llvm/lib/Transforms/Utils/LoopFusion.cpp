@@ -51,7 +51,7 @@ bool areDistanceIndependent (const SCEV *stride, const SCEV *c1, const SCEV *c2,
     if (isa<SCEVConstant>(*delta) && isa<SCEVConstant>(*stride))
     {
         // get dependece distance and return true if it is positive, otherwise return false
-        //SE->isKnownPositive()
+        return SE->isKnownPositive(delta);
     }
 }
 
@@ -59,7 +59,7 @@ bool areDistanceIndependent (const SCEV *stride, const SCEV *c1, const SCEV *c2,
 bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE)
 {
     // we only analyze loops in simplified form, so with a single entry and a single exit
-    if (!l1->isLoopSimplifyForm() || !l2->isLoopSimplifyForm())
+    if (!l1->isCanonical(SE) || !l2->isCanonical(SE))
         return false;
     
     // get all the loads and stores
@@ -80,8 +80,7 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE)
         }
     }
 
-    for (auto BI = l2->block_begin(); BI != l2->block_end(); ++BI)
-    //std::unordered_map<Value*, std::vector<std::vector<int, int>>> index_map;
+    
     for (auto BI = l1->block_begin(); BI != l2->block_end(); ++BI)
     {
         BasicBlock *BB = *BI;
@@ -111,12 +110,10 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE)
         const SCEV * Stride = Operands1[1];
 
         const SCEV *AddRec1 =SE.getAddExpr(C1, Stride);
-        if (!AddRec1)
-            continue;
         outs() << *AddRec1 << "\n";
 
         for (auto val2: loadsStores2){
-            const SCEV *scevPtr2 = SE.getSCEVAtScope(val1, l1);
+            const SCEV *scevPtr2 = SE.getSCEVAtScope(val2, l2);
             bool IsAlwaysGE = SE.isKnownPredicate(Pred, scevPtr1, scevPtr2);
             outs() << "Predicate: " << (IsAlwaysGE?"True":"False") << "\n";
         }
