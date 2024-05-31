@@ -7,6 +7,8 @@
 #include <llvm/Analysis/DependenceAnalysis.h>
 #include <llvm/Analysis/ScalarEvolutionExpressions.h>
 
+#define DEBUG
+
 using namespace llvm;
 
 bool areAdjacent (Loop *l1, Loop *l2)
@@ -66,21 +68,19 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
     auto collectLoadStores = [&loads, &stores] (Loop *l) {
         for (auto BI = l->block_begin(); BI != l->block_end(); ++BI)
         {
-            outs() << "Collecting loads and stores\n";
             BasicBlock *BB = *BI;
             for (auto i = BB->begin(); i != BB->end(); i++)
             {
                 Instruction *inst = dyn_cast<Instruction>(i);
                 if (!inst)
                     continue;
-                Value *ls = getLoadStorePointerOperand(inst);
-                if (!ls)
-                    continue;
-                outs() << "L/S operand: " << *ls << "\n";
+                // Value *ls = getLoadStorePointerOperand(inst);
+                //if (!ls)
+                //    continue;
                 if (isa<StoreInst>(inst))
-                    stores.push_back(ls);
+                    stores.push_back(inst);
                 else if (isa<LoadInst>(inst))
-                    loads.push_back(ls);
+                    loads.push_back(inst);
             }
         }
     };
@@ -118,15 +118,28 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
     }
     */
 
+   #ifdef DEBUG
+    outs() << "\n Stampa delle load \n";
+    for(auto i : loads){
+        outs() << *i << "\n";
+    }
+    outs() << "\n Stampa delle store \n";
+    for(auto i : stores){
+        outs() << *i << "\n";
+    }
+   #endif
+
    for (auto val1: loads){
         Instruction *inst1 = dyn_cast<Instruction>(val1);
         for (auto val2: stores){
             Instruction *inst2 = dyn_cast<Instruction>(val2);
-            outs() << "Checking predicates\n";
             auto dep = DI.depends(inst1, inst2, true);
-            outs() << "Predicate: " << (dep?"True":"False") << "\n";
-            if (dep)
-                return false;
+
+            #ifdef DEBUG
+                outs() << "Checking " << *val1 << " " << *val2 << " dep? " << (dep ? "True" : "False") << "\n";
+                if(dep)
+                    outs() << "\tand dep is " << (dep->getDistance() > 0 ? "positive" : "negative") << "\n";
+            #endif
         }
     }
 
