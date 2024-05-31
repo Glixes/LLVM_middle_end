@@ -58,12 +58,9 @@ bool areDistanceIndependent (const SCEV *stride, const SCEV *c1, const SCEV *c2,
 
 bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE)
 {
-    outs() << "1\n";
     // we only analyze loops in simplified form, so with a single entry and a single exit
     if (!l1->isLoopSimplifyForm() || !l2->isLoopSimplifyForm())
         return false;
-    
-    outs() << "2\n";
 
     // get all the loads and stores
     std::vector<Value*> loadsStores1;
@@ -82,7 +79,6 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE)
             loadsStores1.push_back(ls);
         }
     }
-    outs() << "3\n";
     
     for (auto BI = l2->block_begin(); BI != l2->block_end(); ++BI)
     {
@@ -98,7 +94,6 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE)
             loadsStores2.push_back(ls);
         }
     }
-    outs() << "4\n";
     ICmpInst::Predicate Pred = ICmpInst::ICMP_SGE;
 
     for (auto val1: loadsStores1){
@@ -112,7 +107,9 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE)
         const SCEV * C1 = Operands1[0];
         const SCEV * Stride = Operands1[1];
 
-        const SCEV *AddRec1 =SE.getAddExpr(C1, Stride);
+        if ((scevPtr1->getSCEVType() != SCEVTypes::scAddRecExpr))
+            continue;
+        const SCEV *AddRec1 = SE.getAddExpr(C1, Stride);
         outs() << *AddRec1 << "\n";
 
         for (auto val2: loadsStores2){
