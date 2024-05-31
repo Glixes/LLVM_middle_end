@@ -141,6 +141,33 @@ Value *getBaseAddress (Instruction *inst)
     return nullptr;
 }
 
+bool fuseLoop (Loop *l1, Loop *l2)
+{
+    SmallVector<BasicBlock *> exits_blocks;
+
+    BasicBlock *first_body = l1->getHeader()->getSingleSuccessor();
+    BasicBlock *first_latch = first_body->getSingleSuccessor();
+    BasicBlock *second_body = l2->getHeader()->getSingleSuccessor();
+    BasicBlock *second_latch = second_body->getSingleSuccessor();
+    l2->getExitBlocks(exits_blocks);
+
+    for (BasicBlock *BB : exits_blocks)
+    {
+        if (BB->getSinglePredecessor() == l2->getHeader())
+        {
+            BB->removeFromParent();
+            BB->moveAfter(l1->getHeader());
+        }
+    }
+
+    second_latch->removeFromParent();
+    first_latch->removeFromParent();
+    second_body->removeFromParent();
+    second_body->moveAfter(first_body);
+    first_latch->moveAfter(second_body);
+    second_latch->moveAfter(l2->getHeader());
+}
+
 PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
 {
     LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
