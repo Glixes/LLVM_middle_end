@@ -148,31 +148,52 @@ Value *getBaseAddress (Instruction *inst)
     return nullptr;
 }
 
-bool fuseLoop (Loop *l1, Loop *l2)
+bool fuseLoop (Loop *l1, Loop *l2, ScalarEvolution *SE)
 {
+    outs() << "1\n";
     SmallVector<BasicBlock *> exits_blocks;
 
+    /*
+    Replace the uses of the induction variable of the second loop with 
+    the induction variable of the first loop.
+    */
+    PHINode *index1 = l1->getInductionVariable(*SE);
+    PHINode *index2 = l2->getInductionVariable(*SE);
+    index2->replaceAllUsesWith(index1);
+    outs() << "2\n";
+
+    /*
+    Get reference to the basic blocks that will undergo relocation.
+    */
     BasicBlock *first_body = l1->getHeader()->getSingleSuccessor();
     BasicBlock *first_latch = first_body->getSingleSuccessor();
     BasicBlock *second_body = l2->getHeader()->getSingleSuccessor();
     BasicBlock *second_latch = second_body->getSingleSuccessor();
+    outs() << "3\n";
     l2->getExitBlocks(exits_blocks);
-
+    outs() << "4\n";
     for (BasicBlock *BB : exits_blocks)
     {
+        outs() << "5\n";
         if (BB->getSinglePredecessor() == l2->getHeader())
         {
+            outs() << "6\n";
             BB->removeFromParent();
             BB->moveAfter(l1->getHeader());
+            outs() << "7\n";
         }
     }
 
+    outs() << "8\n";
     second_latch->removeFromParent();
     first_latch->removeFromParent();
     second_body->removeFromParent();
     second_body->moveAfter(first_body);
     first_latch->moveAfter(second_body);
     second_latch->moveAfter(l2->getHeader());
+    outs() << "9\n";
+
+    return true;
 }
 
 PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
@@ -184,17 +205,24 @@ PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
 
     SmallVector<Loop *, 4> loops_forest = LI.getLoopsInPreorder();
 
+    outs() << "before all\n";
+
     if (loops_forest.size() <= 1)
         return PreservedAnalyses::all();
 
     std::unordered_map<unsigned, Loop*> last_loop_at_level;
     last_loop_at_level[loops_forest[0]->getLoopDepth()] = loops_forest[0];
 
+    outs() << "before loop\n";
+
     for (size_t i = 1; i < loops_forest.size(); i++)
     {
         unsigned loop_depth = loops_forest[i]->getLoopDepth();
         Loop *l1 = last_loop_at_level[loop_depth];
         Loop *l2 = loops_forest[i];
+        outs() << "before fuse\n";
+        fuseLoop(l1, l2, &SE);
+        outs() << "after fuse\n";
 
         // check whether l1 exists, i.e. there is a loop at the current loop level that has been visited before
         // check for the same parent
