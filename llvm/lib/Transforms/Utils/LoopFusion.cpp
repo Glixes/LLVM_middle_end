@@ -1,8 +1,10 @@
 #include "llvm/Transforms/Utils/LoopFusion.h"
 #include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/IR/Instructions.h"
 #include <llvm/IR/Dominators.h>
 #include <llvm/Analysis/PostDominators.h>
 #include <llvm/Analysis/LoopInfo.h>
+#include <llvm/Analysis/ScalarEvolutionExpressions.h>
 
 using namespace llvm;
 
@@ -41,19 +43,83 @@ bool areFlowEquivalent (Loop *l1, Loop *l2, DominatorTree *DT, PostDominatorTree
     return (DT->dominates(B1, B2) && PDT->dominates(B2, B1));
 }
 
-
-bool areDistanceIndependent (Loop *l1, Loop *l2)
+/*
+bool areDistanceIndependent (const SCEV *stride, const SCEV *c1, const SCEV *c2, ScalarEvolution *SE)
 {
-    std::unordered_map<Value*, std::vector<std::vector<int, int>>> index_map;
-    for (auto BI = l1->block_begin(); BI != l2->block_end(); ++BI)
+    const SCEV *delta = SE->getMinusSCEV(c1, c2);
+
+    if (isa<SCEVConstant>(*delta) && isa<SCEVConstant>(*stride))
+    {
+        // get dependece distance and return true if it is positive, otherwise return false
+        return SE->isKnownPositive(delta);
+    }
+}
+*/
+
+bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE)
+{
+    // we only analyze loops in simplified form, so with a single entry and a single exit
+    if (!l1->isLoopSimplifyForm() || !l2->isLoopSimplifyForm())
+        return false;
+
+    // get all the loads and stores
+    std::vector<Value*> loadsStores1;
+    std::vector<Value*> loadsStores2;
+    for (auto BI = l1->block_begin(); BI != l1->block_end(); ++BI)
     {
         BasicBlock *BB = *BI;
         for (auto i = BB->begin(); i != BB->end(); i++)
         {
             Instruction *inst = dyn_cast<Instruction>(i);
-            //index_map[dyn_cast<Value>(inst)].push_back()
+            if (!inst)
+                continue;
+            Value *ls = getLoadStorePointerOperand(inst);
+            if (!ls)
+                continue;
+            loadsStores1.push_back(ls);
         }
     }
+    
+    for (auto BI = l2->block_begin(); BI != l2->block_end(); ++BI)
+    {
+        BasicBlock *BB = *BI;
+        for (auto i = BB->begin(); i != BB->end(); i++)
+        {
+            Instruction *inst = dyn_cast<Instruction>(i);
+            if (!inst)
+                continue;
+            Value *ls = getLoadStorePointerOperand(inst);
+            if (!ls)
+                continue;
+            loadsStores2.push_back(ls);
+        }
+    }
+    ICmpInst::Predicate Pred = ICmpInst::ICMP_SGE;
+
+    for (auto val1: loadsStores1){
+        const SCEV *scevPtr1 = SE.getSCEVAtScope(val1, l1);
+        outs() << *val1 << "\n";
+        outs() << *scevPtr1 << "\n";
+
+        std::vector<const SCEV *> Operands1 = scevPtr1->operands();
+        for (auto op: Operands1)
+            outs() << "Operand: " << *op << "\n";
+        const SCEV * C1 = Operands1[0];
+        const SCEV * Stride = Operands1[1];
+
+        if ((scevPtr1->getSCEVType() != SCEVTypes::scAddRecExpr))
+            continue;
+        const SCEV *AddRec1 = SE.getAddExpr(C1, Stride);
+        outs() << *AddRec1 << "\n";
+
+        for (auto val2: loadsStores2){
+            const SCEV *scevPtr2 = SE.getSCEVAtScope(val2, l2);
+            bool IsAlwaysGE = SE.isKnownPredicate(Pred, scevPtr1, scevPtr2);
+            outs() << "Predicate: " << (IsAlwaysGE?"True":"False") << "\n";
+        }
+    }
+
+    return true;
 }
 
 
@@ -90,7 +156,7 @@ PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
     std::unordered_map<unsigned, Loop*> last_loop_at_level;
     last_loop_at_level[loops_forest[0]->getLoopDepth()] = loops_forest[0];
 
-    for (int i = 1; i < loops_forest.size(); i++)
+    for (size_t i = 1; i < loops_forest.size(); i++)
     {
         unsigned loop_depth = loops_forest[i]->getLoopDepth();
         Loop *l1 = last_loop_at_level[loop_depth];
@@ -107,7 +173,7 @@ PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
             if (areAdjacent(l1, l2) && 
                 haveSameNumberIterations(l1, l2, &SE) && 
                 areFlowEquivalent(l1, l2, &DT, &PDT) && 
-                areDistanceIndependent(l1, l2))
+                areDistanceIndependent(l1, l2, SE))
             {
                 // Loop Fusion
                 continue;
@@ -115,8 +181,6 @@ PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
         }
         
         last_loop_at_level[loop_depth] = loops_forest[i];
-        //(A(DE(F(H)G))BC(IJ(L(O)MN)K))
-        // ADEFHGBCIJLOMNK
     }
 
     return PreservedAnalyses::all();
