@@ -152,13 +152,15 @@ bool fuseLoop (Loop *l1, Loop *l2, ScalarEvolution *SE)
 {
     outs() << "1\n";
     SmallVector<BasicBlock *> exits_blocks;
-
+    
     /*
     Replace the uses of the induction variable of the second loop with 
     the induction variable of the first loop.
     */
     PHINode *index1 = l1->getInductionVariable(*SE);
     PHINode *index2 = l2->getInductionVariable(*SE);
+    outs() << *index1 << "\n";
+    outs() << *index2 << "\n";
     index2->replaceAllUsesWith(index1);
     outs() << "2\n";
 
@@ -198,6 +200,7 @@ bool fuseLoop (Loop *l1, Loop *l2, ScalarEvolution *SE)
 
 PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
 {
+    outs() << "before all\n";
     LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
     ScalarEvolution &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
     DominatorTree &DT = AM.getResult<DominatorTreeAnalysis>(F);
