@@ -22,16 +22,23 @@ bool areAdjacent (Loop *l1, Loop *l2)
 }
 
 
-int getNormalizedIterationsNumber (Loop *l, ScalarEvolution *SE)
+const SCEV *getTripCount (Loop *l, ScalarEvolution *SE)
 {
-    int iterations_number = SE->getSmallConstantMaxTripCount(l);
-    return (l->isGuarded() ? iterations_number++ : iterations_number);
+    const SCEV *trip_count = SE->getBackedgeTakenCount(l);
+
+    if (isa<SCEVCouldNotCompute>(trip_count))
+    {
+        outs() << "Trip count of loop " << l->getName() << " could not be computed.";
+        return nullptr;
+    }
+
+    return trip_count;
 }
 
 
-bool haveSameNumberIterations (Loop *l1, Loop *l2, ScalarEvolution *SE)
+bool haveSameIterationsNumber (Loop *l1, Loop *l2, ScalarEvolution *SE)
 {
-    return getNormalizedIterationsNumber(l1, SE) == getNormalizedIterationsNumber(l2, SE);
+    return getTripCount(l1, SE) == getTripCount(l2, SE);
 }
 
 
@@ -198,7 +205,7 @@ PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
             the others remaining checks are not executed and the if statement condition become false.
             */ 
             if (areAdjacent(l1, l2) && 
-                haveSameNumberIterations(l1, l2, &SE) && 
+                haveSameIterationsNumber(l1, l2, &SE) && 
                 areFlowEquivalent(l1, l2, &DT, &PDT) && 
                 areDistanceIndependent(l1, l2, SE))
             {
