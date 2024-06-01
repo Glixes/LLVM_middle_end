@@ -4,7 +4,10 @@
 #include <llvm/IR/Dominators.h>
 #include <llvm/Analysis/PostDominators.h>
 #include <llvm/Analysis/LoopInfo.h>
+#include <llvm/Analysis/DependenceAnalysis.h>
 #include <llvm/Analysis/ScalarEvolutionExpressions.h>
+
+#define DEBUG
 
 using namespace llvm;
 
@@ -56,47 +59,39 @@ bool areDistanceIndependent (const SCEV *stride, const SCEV *c1, const SCEV *c2,
 }
 */
 
-bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE)
+bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, DependenceInfo &DI)
 {
-    // we only analyze loops in simplified form, so with a single entry and a single exit
-    if (!l1->isLoopSimplifyForm() || !l2->isLoopSimplifyForm())
-        return false;
-
     // get all the loads and stores
-    std::vector<Value*> loadsStores1;
-    std::vector<Value*> loadsStores2;
-    for (auto BI = l1->block_begin(); BI != l1->block_end(); ++BI)
-    {
-        BasicBlock *BB = *BI;
-        for (auto i = BB->begin(); i != BB->end(); i++)
+    std::vector<Value*> loads;
+    std::vector<Value*> stores;
+
+    auto collectLoadStores = [&loads, &stores] (Loop *l) {
+        for (auto BI = l->block_begin(); BI != l->block_end(); ++BI)
         {
-            Instruction *inst = dyn_cast<Instruction>(i);
-            if (!inst)
-                continue;
-            Value *ls = getLoadStorePointerOperand(inst);
-            if (!ls)
-                continue;
-            loadsStores1.push_back(ls);
+            BasicBlock *BB = *BI;
+            for (auto i = BB->begin(); i != BB->end(); i++)
+            {
+                Instruction *inst = dyn_cast<Instruction>(i);
+                if (!inst)
+                    continue;
+                // Value *ls = getLoadStorePointerOperand(inst);
+                //if (!ls)
+                //    continue;
+                if (isa<StoreInst>(inst))
+                    stores.push_back(inst);
+                else if (isa<LoadInst>(inst))
+                    loads.push_back(inst);
+            }
         }
-    }
+    };
     
-    for (auto BI = l2->block_begin(); BI != l2->block_end(); ++BI)
-    {
-        BasicBlock *BB = *BI;
-        for (auto i = BB->begin(); i != BB->end(); i++)
-        {
-            Instruction *inst = dyn_cast<Instruction>(i);
-            if (!inst)
-                continue;
-            Value *ls = getLoadStorePointerOperand(inst);
-            if (!ls)
-                continue;
-            loadsStores2.push_back(ls);
-        }
-    }
+    collectLoadStores(l1);
+    collectLoadStores(l2);
+    
     ICmpInst::Predicate Pred = ICmpInst::ICMP_SGE;
 
-    for (auto val1: loadsStores1){
+    /*
+    for (auto val1: loads){
         const SCEV *scevPtr1 = SE.getSCEVAtScope(val1, l1);
         outs() << *val1 << "\n";
         outs() << *scevPtr1 << "\n";
@@ -112,10 +107,39 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE)
         const SCEV *AddRec1 = SE.getAddExpr(C1, Stride);
         outs() << *AddRec1 << "\n";
 
-        for (auto val2: loadsStores2){
+        for (auto val2: stores){
+            outs() << "Checking predicates\n";
             const SCEV *scevPtr2 = SE.getSCEVAtScope(val2, l2);
+            outs() << *val2 << "\n";
+            outs() << *scevPtr2 << "\n";
             bool IsAlwaysGE = SE.isKnownPredicate(Pred, scevPtr1, scevPtr2);
             outs() << "Predicate: " << (IsAlwaysGE?"True":"False") << "\n";
+        }
+    }
+    */
+
+   #ifdef DEBUG
+    outs() << "\n Stampa delle load \n";
+    for(auto i : loads){
+        outs() << *i << "\n";
+    }
+    outs() << "\n Stampa delle store \n";
+    for(auto i : stores){
+        outs() << *i << "\n";
+    }
+   #endif
+
+   for (auto val1: loads){
+        Instruction *inst1 = dyn_cast<Instruction>(val1);
+        for (auto val2: stores){
+            Instruction *inst2 = dyn_cast<Instruction>(val2);
+            auto dep = DI.depends(inst1, inst2, true);
+
+            #ifdef DEBUG
+                outs() << "Checking " << *val1 << " " << *val2 << " dep? " << (dep ? "True" : "False") << "\n";
+                if(dep)
+                    outs() << "\tand dep is " << (dep->getDistance() > 0 ? "positive" : "negative") << "\n";
+            #endif
         }
     }
 
@@ -147,6 +171,7 @@ PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
     ScalarEvolution &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
     DominatorTree &DT = AM.getResult<DominatorTreeAnalysis>(F);
     PostDominatorTree &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
+    DependenceInfo &DI = AM.getResult<DependenceAnalysis>(F);
 
     SmallVector<Loop *, 4> loops_forest = LI.getLoopsInPreorder();
 
@@ -173,7 +198,7 @@ PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
             if (areAdjacent(l1, l2) && 
                 haveSameNumberIterations(l1, l2, &SE) && 
                 areFlowEquivalent(l1, l2, &DT, &PDT) && 
-                areDistanceIndependent(l1, l2, SE))
+                areDistanceIndependent(l1, l2, SE, DI))
             {
                 // Loop Fusion
                 continue;
