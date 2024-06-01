@@ -5,6 +5,7 @@
 #include <llvm/Analysis/PostDominators.h>
 #include <llvm/Analysis/LoopInfo.h>
 #include <llvm/Analysis/ScalarEvolutionExpressions.h>
+#include <llvm/Transforms/Utils/BasicBlockUtils.h>
 
 using namespace llvm;
 
@@ -130,35 +131,19 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE)
 }
 
 
-Value *getBaseAddress (Instruction *inst)
-{
-    if (isa<AllocaInst>(inst) || isa<Argument>(inst))
-        return inst;
-    
-    Value *i;
-    for (Value::use_iterator iter = inst->use_begin(); iter != inst->use_end(); ++iter)
-    {
-        Use *use_of_inst = &(*iter);
-        Instruction *user_inst = dyn_cast<Instruction>(iter->getUser());
-
-        i = getBaseAddress(user_inst);
-        if (i)
-            return i;
-    }
-    return nullptr;
-}
-
 bool fuseLoop (Loop *l1, Loop *l2, ScalarEvolution *SE)
 {
     outs() << "1\n";
+    BasicBlock *l2_entry_block = l2->isGuarded() ? l2->getLoopGuardBranch()->getParent() : l2->getLoopPreheader(); 
+
     SmallVector<BasicBlock *> exits_blocks;
     
     /*
     Replace the uses of the induction variable of the second loop with 
     the induction variable of the first loop.
     */
-    PHINode *index1 = l1->getInductionVariable(*SE);
-    PHINode *index2 = l2->getInductionVariable(*SE);
+    PHINode *index1 = l1->getCanonicalInductionVariable();
+    PHINode *index2 = l2->getCanonicalInductionVariable();
     outs() << *index1 << "\n";
     outs() << *index2 << "\n";
     index2->replaceAllUsesWith(index1);
@@ -167,32 +152,40 @@ bool fuseLoop (Loop *l1, Loop *l2, ScalarEvolution *SE)
     /*
     Get reference to the basic blocks that will undergo relocation.
     */
-    BasicBlock *first_body = l1->getHeader()->getSingleSuccessor();
-    BasicBlock *first_latch = first_body->getSingleSuccessor();
-    BasicBlock *second_body = l2->getHeader()->getSingleSuccessor();
-    BasicBlock *second_latch = second_body->getSingleSuccessor();
+    BasicBlock *first_latch = l1->getLoopLatch();
+    BasicBlock *first_body = first_latch->getUniquePredecessor();
+    BasicBlock *second_latch = l2->getLoopLatch();
+    BasicBlock *second_body = second_latch->getUniquePredecessor();
     outs() << "3\n";
     l2->getExitBlocks(exits_blocks);
     outs() << "4\n";
     for (BasicBlock *BB : exits_blocks)
     {
+        outs() << *BB << "\n";
         outs() << "5\n";
-        if (BB->getSinglePredecessor() == l2->getHeader())
+        for (pred_iterator pit = pred_begin(BB); pit != pred_end(BB); pit++)
         {
-            outs() << "6\n";
-            BB->removeFromParent();
-            BB->moveAfter(l1->getHeader());
-            outs() << "7\n";
+            BasicBlock *predecessor = dyn_cast<BasicBlock>(*pit);
+            if (predecessor == l2->getHeader())
+            {
+                outs() << "6\n";
+                BB->moveAfter(l1->getHeader());
+                l1->getHeader()->getTerminator()->replaceUsesOfWith(l2_entry_block, BB);
+                outs() << "7\n";
+            }
         }
     }
 
     outs() << "8\n";
-    second_latch->removeFromParent();
-    first_latch->removeFromParent();
-    second_body->removeFromParent();
-    second_body->moveAfter(first_body);
-    first_latch->moveAfter(second_body);
     second_latch->moveAfter(l2->getHeader());
+    BranchInst *new_branch = BranchInst::Create(second_latch);
+    ReplaceInstWithInst(l2->getHeader()->getTerminator(), new_branch);
+
+    second_body->moveAfter(first_body);
+    first_body->getTerminator()->replaceUsesOfWith(first_latch, second_body);
+
+    first_latch->moveAfter(second_body);
+    second_body->getTerminator()->replaceUsesOfWith(second_latch, first_latch);
     outs() << "9\n";
 
     return true;
@@ -223,9 +216,6 @@ PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
         unsigned loop_depth = loops_forest[i]->getLoopDepth();
         Loop *l1 = last_loop_at_level[loop_depth];
         Loop *l2 = loops_forest[i];
-        outs() << "before fuse\n";
-        fuseLoop(l1, l2, &SE);
-        outs() << "after fuse\n";
 
         // check whether l1 exists, i.e. there is a loop at the current loop level that has been visited before
         // check for the same parent
@@ -240,7 +230,9 @@ PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
                 areFlowEquivalent(l1, l2, &DT, &PDT) && 
                 areDistanceIndependent(l1, l2, SE))
             {
-                // Loop Fusion
+                outs() << "before fuse\n";
+                fuseLoop(l1, l2, &SE);
+                outs() << "after fuse\n";
                 continue;
             }
         }
