@@ -129,13 +129,62 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
 
             #ifdef DEBUG
                 outs() << "Checking " << *val1 << " " << *val2 << " dep? " << (dep ? "True" : "False") << "\n";
-                if(dep)
-                    outs() << "\tand dep is " << *(dep->getDistance(dep->getLevels())) << "\n";
             #endif
         
             if (dep){
-                if(!dep->isInput() && !dep->isOutput());
+/*                 if(!dep->isInput() && !dep->isOutput()){
+
+                    Value *loadvalue = getLoadStorePointerOperand(inst1);
+                    const SCEV *scev1 = SE.getSCEV(loadvalue);
+                    Value *storevalue = getLoadStorePointerOperand(inst2);
+                    const SCEV *scev2 = SE.getSCEV(storevalue);
+
+                    outs() << "scev 1: " << *scev1 << " " << "\n" << "scev 2: " << *scev2 << "\n";
+                    bool IsAlwaysGE = SE.isKnownPredicate(Pred, scev1, scev2);
+                    outs() << "Predicate: " << (IsAlwaysGE ? "True" : "False") << "\n";
+                    const SCEV *diff = SE.getMinusSCEV(scev1, scev2);
+                    // const SCEV *diff = SE.getAddExpr(scev1, SE.getNegativeSCEV(scev2));
+                    outs() << *diff << "\n";
                     return false;
+                } */
+                
+                if(!dep->isInput() && !dep->isOutput()){
+                    ICmpInst::Predicate Pred = ICmpInst::ICMP_SGE;
+                    Value *loadArg = getLoadStorePointerOperand(inst1);
+                    const SCEV *scevPtrLoad = SE.getSCEV(loadArg);
+                    Value *storeArg = getLoadStorePointerOperand(inst2);
+                    const SCEV *scevPtrStore = SE.getSCEV(storeArg);
+                    outs() << "Load SCVEV " << *scevPtrLoad << "\n";
+                    outs() << "Store SCVEV " << *scevPtrStore << "\n";
+
+                    std::vector<const SCEV *> OperandsLoad = scevPtrLoad->operands();
+                    for (auto op: OperandsLoad)
+                        outs() << "Operand: " << *op << "\n";
+                    const SCEV * C1 = OperandsLoad[0];
+                    const SCEV * Stride1 = OperandsLoad[1];
+                    if ((scevPtrLoad->getSCEVType() != SCEVTypes::scAddRecExpr))
+                        continue;
+                    const SCEV *AddRecLoad = SE.getAddExpr(C1, Stride1);
+                    outs() << *AddRecLoad << "\n";
+                    
+                    std::vector<const SCEV *> OperandsStore = scevPtrStore->operands();
+                    for (auto op: OperandsStore)
+                        outs() << "Operand: " << *op << "\n";
+                    const SCEV * C2 = OperandsStore[0];
+                    const SCEV * Stride2 = OperandsStore[1];
+                    if ((scevPtrStore->getSCEVType() != SCEVTypes::scAddRecExpr))
+                        continue;
+                    const SCEV *AddRecStore = SE.getAddExpr(C2, Stride2);
+                    outs() << *AddRecStore << "\n";
+
+                    const SCEV *delta = SE.getMinusSCEV(AddRecLoad, AddRecStore);
+                    outs() << "Delta: " << *delta << "\n";
+                    bool IsAlwaysGE = SE.isKnownPredicate(Pred, AddRecLoad, AddRecStore);
+                    outs() << "Predicate: " << (IsAlwaysGE?"True":"False") << "\n";
+                    return false;
+
+                    //TODO: find a more decent predicate for SCEV
+                }
             }
         }
     }
