@@ -164,10 +164,12 @@ bool fuseLoop (Loop *l1, Loop *l2, ScalarEvolution *SE)
     /*
     Get reference to the basic blocks that will undergo relocation.
     */
+    BasicBlock *first_header = l1->getHeader();
     BasicBlock *first_latch = l1->getLoopLatch();
-    BasicBlock *first_body = first_latch->getUniquePredecessor();
+    BasicBlock *first_body = first_header->getUniqueSuccessor();
+    BasicBlock *second_header = l2->getHeader();
     BasicBlock *second_latch = l2->getLoopLatch();
-    BasicBlock *second_body = second_latch->getUniquePredecessor();
+    BasicBlock *second_body = second_header->getUniqueSuccessor();
     outs() << "3\n";
     l2->getExitBlocks(exits_blocks);
     outs() << "4\n";
@@ -197,7 +199,11 @@ bool fuseLoop (Loop *l1, Loop *l2, ScalarEvolution *SE)
     first_body->getTerminator()->replaceUsesOfWith(first_latch, second_body);
 
     first_latch->moveAfter(second_body);
-    second_body->getTerminator()->replaceUsesOfWith(second_latch, first_latch);
+    for (pred_iterator pit = pred_begin(second_latch); pit != pred_end(second_latch); pit++)
+    {
+        BasicBlock *body_leaf = dyn_cast<BasicBlock>(*pit);
+        body_leaf->getTerminator()->replaceUsesOfWith(second_latch, first_latch);
+    }
     outs() << "9\n";
 
     return true;
