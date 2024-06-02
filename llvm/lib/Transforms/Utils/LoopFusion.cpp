@@ -183,6 +183,7 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
                     outs() << "Predicate: " << (IsAlwaysGE?"True":"False") << "\n";
                     return false;
 
+
                     //TODO: find a more decent predicate for SCEV
                 }
             }
