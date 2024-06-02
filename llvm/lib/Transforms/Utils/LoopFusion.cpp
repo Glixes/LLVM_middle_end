@@ -26,23 +26,22 @@ bool areAdjacent (Loop *l1, Loop *l2)
 }
 
 
-const SCEV *getTripCount (Loop *l, ScalarEvolution *SE)
-{
-    const SCEV *trip_count = SE->getBackedgeTakenCount(l);
-
-    if (isa<SCEVCouldNotCompute>(trip_count))
-    {
-        outs() << "Trip count of loop " << l->getName() << " could not be computed.";
-        return nullptr;
-    }
-
-    return trip_count;
-}
-
-
 bool haveSameIterationsNumber (Loop *l1, Loop *l2, ScalarEvolution *SE)
 {
-    return getTripCount(l1, SE) == getTripCount(l2, SE);
+    auto getTripCount = [SE] (Loop *l) -> const SCEV *
+    {
+        const SCEV *trip_count = SE->getBackedgeTakenCount(l);
+
+        if (isa<SCEVCouldNotCompute>(trip_count))
+        {
+            outs() << "Trip count of loop " << l->getName() << " could not be computed.";
+            return nullptr;
+        }
+
+        return trip_count;
+    };
+
+    return getTripCount(l1) == getTripCount(l2);
 }
 
 
@@ -54,18 +53,6 @@ bool areFlowEquivalent (Loop *l1, Loop *l2, DominatorTree *DT, PostDominatorTree
     return (DT->dominates(B1, B2) && PDT->dominates(B2, B1));
 }
 
-/*
-bool areDistanceIndependent (const SCEV *stride, const SCEV *c1, const SCEV *c2, ScalarEvolution *SE)
-{
-    const SCEV *delta = SE->getMinusSCEV(c1, c2);
-
-    if (isa<SCEVConstant>(*delta) && isa<SCEVConstant>(*stride))
-    {
-        // get dependece distance and return true if it is positive, otherwise return false
-        return SE->isKnownPositive(delta);
-    }
-}
-*/
 
 bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, DependenceInfo &DI)
 {
@@ -82,9 +69,6 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
                 Instruction *inst = dyn_cast<Instruction>(i);
                 if (!inst)
                     continue;
-                // Value *ls = getLoadStorePointerOperand(inst);
-                //if (!ls)
-                //    continue;
                 if (isa<StoreInst>(inst))
                     stores.push_back(inst);
                 else if (isa<LoadInst>(inst))
@@ -126,7 +110,7 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
     }
     */
 
-   #ifdef DEBUG
+    #ifdef DEBUG
     outs() << "\n Stampa delle load \n";
     for(auto i : loads){
         outs() << *i << "\n";
@@ -135,9 +119,9 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
     for(auto i : stores){
         outs() << *i << "\n";
     }
-   #endif
+    #endif
 
-   for (auto val1: loads){
+    for (auto val1: loads){
         Instruction *inst1 = dyn_cast<Instruction>(val1);
         for (auto val2: stores){
             Instruction *inst2 = dyn_cast<Instruction>(val2);
@@ -146,11 +130,15 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
             #ifdef DEBUG
                 outs() << "Checking " << *val1 << " " << *val2 << " dep? " << (dep ? "True" : "False") << "\n";
                 if(dep)
-                    outs() << "\tand dep is " << (dep->getDistance() > 0 ? "positive" : "negative") << "\n";
+                    outs() << "\tand dep is " << *(dep->getDistance(dep->getLevels())) << "\n";
             #endif
+        
+            if (dep){
+                if(!dep->isInput() && !dep->isOutput());
+                    return false;
+            }
         }
     }
-
     return true;
 }
 
