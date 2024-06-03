@@ -54,82 +54,140 @@ bool areFlowEquivalent (Loop *l1, Loop *l2, DominatorTree *DT, PostDominatorTree
 }
 
 
+bool isDistancePositive (Instruction *inst1, Instruction *inst2, ScalarEvolution &SE, DependenceInfo DI){
+
+    // This lambda return CanonicalAddExpr (or something better if it exists)
+    auto getCanonicalAddExpr = [&SE](Instruction *instToAnalyze) -> const SCEV * {
+        
+        Value *instArguments = getLoadStorePointerOperand(instToAnalyze);        
+        const SCEV *scevPtr = SE.getSCEV(instArguments);   
+        
+        outs() << scevPtr-> getSCEVType() << "\n";
+
+        if ((scevPtr->getSCEVType() != SCEVTypes::scAddRecExpr && 
+                scevPtr->getSCEVType() != SCEVTypes::scAddExpr))
+            return nullptr;
+        
+        std::vector<const SCEV *> OperandsLoad = scevPtr->operands();
+        
+        #ifdef DEBUG
+            for (auto op: OperandsLoad)
+                outs() << "Operand: " << *op << "\n";
+        #endif
+        
+        const SCEV *ConstantOfSCEV = OperandsLoad[0];
+        const SCEV *StrideOfSCEV = OperandsLoad[1];            
+
+        const SCEV *CanonicalAddExpr = SE.getAddExpr(ConstantOfSCEV, StrideOfSCEV);       
+        outs() << *CanonicalAddExpr << "\n";
+
+        return CanonicalAddExpr;
+
+    };
+
+    const SCEV *AddRecLoad = getCanonicalAddExpr(inst1); 
+    const SCEV *AddRecStore = getCanonicalAddExpr(inst2); 
+
+    if (!(AddRecLoad && AddRecStore)){
+        #ifdef DEBUG
+            outs() << "Can't find a Canonical Add Expression for inst!" << "\n";
+        #endif
+        return false;
+    }
+
+    const SCEV *delta = SE.getMinusSCEV(AddRecLoad, AddRecStore);
+    
+    #ifdef DEBUG
+        outs() << "Delta: " << *delta << "\n";
+    #endif
+
+    ICmpInst::Predicate Pred = ICmpInst::ICMP_SGE;
+    bool IsAlwaysGE = SE.isKnownPredicate(Pred, AddRecLoad, AddRecStore);
+    
+    #ifdef DEBUG
+        outs() << "Predicate: " << (IsAlwaysGE ? "True" : "False") << "\n";
+    #endif
+
+    auto instructionDependence = DI.depends(inst1, inst2, true);
+
+    outs() << "isDirectionNegative()? " << instructionDependence->isDirectionNegative() << "\n";
+
+    /*     for(int DependenceLevel = 0; DependenceLevel <= (instructionDependence->getLevels() ? instructionDependence->getLevels() : 0) ; DependenceLevel++){
+        outs() << "Stampa del livello " << DependenceLevel << ": ";
+        if (*instructionDependence->getDistance(DependenceLevel) != nullptr)
+            outs() << *instructionDependence->getDistance(DependenceLevel) << "\n";
+        else 
+            outs() << "Distance not found!\n";
+    } */
+    outs() << "normalize()? " << instructionDependence->normalize(&SE) << "\n";
+
+    return false;
+
+}
+
 bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, DependenceInfo &DI)
 {
     // get all the loads and stores
-    std::vector<Value*> loads;
-    std::vector<Value*> stores;
+    std::vector<Value*> loadsvector;
+    std::vector<Value*> storesvector;
 
-    auto collectLoadStores = [&loads, &stores] (Loop *l) {
-        for (auto BI = l->block_begin(); BI != l->block_end(); ++BI)
-        {
+    //Lambda function. This collect loads and stores in vectors 
+    auto collectLoadStores = [&loadsvector, &storesvector] (Loop *l) {
+        for (auto BI = l->block_begin(); BI != l->block_end(); ++BI) {
+            
             BasicBlock *BB = *BI;
-            for (auto i = BB->begin(); i != BB->end(); i++)
-            {
+
+            for (auto i = BB->begin(); i != BB->end(); i++) {
                 Instruction *inst = dyn_cast<Instruction>(i);
-                if (!inst)
+
+                if (inst){
+                    if (isa<StoreInst>(inst))
+                        storesvector.push_back(inst);
+                    if (isa<LoadInst>(inst))
+                        loadsvector.push_back(inst);
+                }
+                else
                     continue;
-                if (isa<StoreInst>(inst))
-                    stores.push_back(inst);
-                else if (isa<LoadInst>(inst))
-                    loads.push_back(inst);
-            }
-        }
+
+            }}
     };
     
     collectLoadStores(l1);
     collectLoadStores(l2);
-    
-    ICmpInst::Predicate Pred = ICmpInst::ICMP_SGE;
 
-    /*
-    for (auto val1: loads){
-        const SCEV *scevPtr1 = SE.getSCEVAtScope(val1, l1);
-        outs() << *val1 << "\n";
-        outs() << *scevPtr1 << "\n";
-
-        std::vector<const SCEV *> Operands1 = scevPtr1->operands();
-        for (auto op: Operands1)
-            outs() << "Operand: " << *op << "\n";
-        const SCEV * C1 = Operands1[0];
-        const SCEV * Stride = Operands1[1];
-
-        if ((scevPtr1->getSCEVType() != SCEVTypes::scAddRecExpr))
-            continue;
-        const SCEV *AddRec1 = SE.getAddExpr(C1, Stride);
-        outs() << *AddRec1 << "\n";
-
-        for (auto val2: stores){
-            outs() << "Checking predicates\n";
-            const SCEV *scevPtr2 = SE.getSCEVAtScope(val2, l2);
-            outs() << *val2 << "\n";
-            outs() << *scevPtr2 << "\n";
-            bool IsAlwaysGE = SE.isKnownPredicate(Pred, scevPtr1, scevPtr2);
-            outs() << "Predicate: " << (IsAlwaysGE?"True":"False") << "\n";
-        }
-    }
-    */
-
-    #ifdef DEBUG
-    outs() << "\n Stampa delle load \n";
-    for(auto i : loads){
-        outs() << *i << "\n";
-    }
-    outs() << "\n Stampa delle store \n";
-    for(auto i : stores){
-        outs() << *i << "\n";
-    }
+    #ifdef DEBUG        
+        outs() << "\n Stampa delle load \n";
+        for(auto i : loadsvector)   
+            {outs() << *i << "\n";}
+        
+        outs() << "\n Stampa delle store \n";    
+        for(auto i : storesvector)  
+            {outs() << *i << "\n";}
     #endif
 
-    for (auto val1: loads){
+    for (auto val1: loadsvector){
         Instruction *inst1 = dyn_cast<Instruction>(val1);
-        for (auto val2: stores){
+        for (auto val2: storesvector){
             Instruction *inst2 = dyn_cast<Instruction>(val2);
-            auto dep = DI.depends(inst1, inst2, true);
+            
+            auto instructionDependence = DI.depends(inst1, inst2, true);
 
             #ifdef DEBUG
-                outs() << "Checking " << *val1 << " " << *val2 << " dep? " << (dep ? "True" : "False") << "\n";
+                outs() << "Checking " << *val1 << " " << *val2 << " dep? " << (instructionDependence ? "True" : "False") << "\n";
             #endif
+
+            if (instructionDependence
+                && !instructionDependence->isInput()
+                && !instructionDependence->isOutput()) {
+                
+                // If !isDistancePositive, then there is a negative dependency, so return false
+                if (!isDistancePositive(inst1, inst2, SE, DI)){
+                    // outs() << "isDirectionNegative()? " << instructionDependence->isDirectionNegative() << "\n";
+                    
+                    return false;
+                }
+
+            }
         }
     }
     return true;
