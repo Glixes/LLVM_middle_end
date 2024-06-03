@@ -129,23 +129,15 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
 
             #ifdef DEBUG
                 outs() << "Checking " << *val1 << " " << *val2 << " dep? " << (dep ? "True" : "False") << "\n";
-                if(dep)
-                    outs() << "\tand dep is " << *(dep->getDistance(dep->getLevels())) << "\n";
             #endif
-        
-            if (dep){
-                if(!dep->isInput() && !dep->isOutput());
-                    return false;
-            }
         }
     }
     return true;
 }
 
 
-bool fuseLoop (Loop *l1, Loop *l2, ScalarEvolution *SE)
+void fuseLoop (Loop *l1, Loop *l2)
 {
-    outs() << "1\n";
     BasicBlock *l2_entry_block = l2->isGuarded() ? l2->getLoopGuardBranch()->getParent() : l2->getLoopPreheader(); 
 
     SmallVector<BasicBlock *> exits_blocks;
@@ -156,57 +148,64 @@ bool fuseLoop (Loop *l1, Loop *l2, ScalarEvolution *SE)
     */
     PHINode *index1 = l1->getCanonicalInductionVariable();
     PHINode *index2 = l2->getCanonicalInductionVariable();
-    outs() << *index1 << "\n";
-    outs() << *index2 << "\n";
     index2->replaceAllUsesWith(index1);
-    outs() << "2\n";
 
     /*
     Get reference to the basic blocks that will undergo relocation.
     */
-    BasicBlock *first_header = l1->getHeader();
-    BasicBlock *first_latch = l1->getLoopLatch();
-    BasicBlock *first_body = first_header->getUniqueSuccessor();
-    BasicBlock *second_header = l2->getHeader();
-    BasicBlock *second_latch = l2->getLoopLatch();
-    BasicBlock *second_body = second_header->getUniqueSuccessor();
-    outs() << "3\n";
+    struct LoopStructure
+    {
+        BasicBlock *header;
+        BasicBlock *latch;
+        BasicBlock *body_head;
+        BasicBlock *body_tail;
+
+        LoopStructure (Loop *l)
+        {
+            this->header = l->getHeader();
+            this->latch = l->getLoopLatch();
+            this->body_head = getBodyHead(l, header);
+            this->body_tail = latch->getUniquePredecessor();
+        }
+
+        BasicBlock *getBodyHead (Loop *l, BasicBlock *header)
+        {
+            for (auto sit = succ_begin(header); sit != succ_end(header); sit++)
+            {
+                BasicBlock *successor = dyn_cast<BasicBlock>(*sit);
+                if (l->contains(successor))
+                    return successor;
+            }
+            return nullptr;
+        }
+    };
+    
+    LoopStructure *first_loop = new LoopStructure(l1);
+    LoopStructure *second_loop = new LoopStructure(l2);
+
     l2->getExitBlocks(exits_blocks);
-    outs() << "4\n";
     for (BasicBlock *BB : exits_blocks)
     {
-        outs() << *BB << "\n";
-        outs() << "5\n";
         for (pred_iterator pit = pred_begin(BB); pit != pred_end(BB); pit++)
         {
             BasicBlock *predecessor = dyn_cast<BasicBlock>(*pit);
             if (predecessor == l2->getHeader())
             {
-                outs() << "6\n";
-                BB->moveAfter(l1->getHeader());
                 l1->getHeader()->getTerminator()->replaceUsesOfWith(l2_entry_block, BB);
-                outs() << "7\n";
             }
         }
     }
 
-    outs() << "8\n";
-    second_latch->moveAfter(l2->getHeader());
-    BranchInst *new_branch = BranchInst::Create(second_latch);
-    ReplaceInstWithInst(l2->getHeader()->getTerminator(), new_branch);
+    BranchInst *new_branch = BranchInst::Create(second_loop->latch);
+    ReplaceInstWithInst(second_loop->header->getTerminator(), new_branch);
 
-    second_body->moveAfter(first_body);
-    first_body->getTerminator()->replaceUsesOfWith(first_latch, second_body);
+    first_loop->body_tail->getTerminator()->replaceUsesOfWith(first_loop->latch, second_loop->body_head);
+    second_loop->body_tail->getTerminator()->replaceUsesOfWith(second_loop->latch, first_loop->latch);
 
-    first_latch->moveAfter(second_body);
-    for (pred_iterator pit = pred_begin(second_latch); pit != pred_end(second_latch); pit++)
-    {
-        BasicBlock *body_leaf = dyn_cast<BasicBlock>(*pit);
-        body_leaf->getTerminator()->replaceUsesOfWith(second_latch, first_latch);
-    }
-    outs() << "9\n";
+    delete first_loop;
+    delete second_loop;
 
-    return true;
+    return;
 }
 
 PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
@@ -230,6 +229,8 @@ PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
 
     outs() << "before loop\n";
 
+
+    bool fusion_happened = false;
     for (size_t i = 1; i < loops_forest.size(); i++)
     {
         unsigned loop_depth = loops_forest[i]->getLoopDepth();
@@ -249,15 +250,14 @@ PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
                 areFlowEquivalent(l1, l2, &DT, &PDT) && 
                 areDistanceIndependent(l1, l2, SE, DI))
             {
-                outs() << "before fuse\n";
-                fuseLoop(l1, l2, &SE);
-                outs() << "after fuse\n";
-                continue;
+                fuseLoop(l1, l2);
+                fusion_happened = true;
+                break;
             }
         }
         
         last_loop_at_level[loop_depth] = loops_forest[i];
     }
 
-    return PreservedAnalyses::all();
+    return fusion_happened ? PreservedAnalyses::none() : PreservedAnalyses::all();
 }
