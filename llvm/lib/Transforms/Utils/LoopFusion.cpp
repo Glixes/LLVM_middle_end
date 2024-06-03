@@ -103,26 +103,19 @@ bool isDistancePositive (Instruction *inst1, Instruction *inst2, ScalarEvolution
 
     ICmpInst::Predicate Pred = ICmpInst::ICMP_SGE;
     bool IsAlwaysGE = SE.isKnownPredicate(Pred, AddRecLoad, AddRecStore);
+    bool IsAlwaysGEDelta = SE.isKnownPredicate(Pred, delta, SE.getZero(IntegerType::get(inst1->getContext(), 32)));
     
     #ifdef DEBUG
         outs() << "Predicate: " << (IsAlwaysGE ? "True" : "False") << "\n";
+        outs() << "Delta predicate: " << (IsAlwaysGEDelta ? "True" : "False") << "\n";
     #endif
 
     auto instructionDependence = DI.depends(inst1, inst2, true);
 
     outs() << "isDirectionNegative()? " << instructionDependence->isDirectionNegative() << "\n";
-
-    /*     for(int DependenceLevel = 0; DependenceLevel <= (instructionDependence->getLevels() ? instructionDependence->getLevels() : 0) ; DependenceLevel++){
-        outs() << "Stampa del livello " << DependenceLevel << ": ";
-        if (*instructionDependence->getDistance(DependenceLevel) != nullptr)
-            outs() << *instructionDependence->getDistance(DependenceLevel) << "\n";
-        else 
-            outs() << "Distance not found!\n";
-    } */
     outs() << "normalize()? " << instructionDependence->normalize(&SE) << "\n";
 
-    return false;
-
+    return IsAlwaysGE;
 }
 
 bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, DependenceInfo &DI)
