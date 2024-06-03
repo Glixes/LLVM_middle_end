@@ -54,138 +54,132 @@ bool areFlowEquivalent (Loop *l1, Loop *l2, DominatorTree *DT, PostDominatorTree
 }
 
 
+bool isDistancePositive (Instruction *inst1, Instruction *inst2, ScalarEvolution &SE, DependenceInfo DI){
+
+    // This lambda return CanonicalAddExpr (or something better if it exists)
+    auto getCanonicalAddExpr = [&SE](Instruction *instToAnalyze) -> const SCEV * {
+        
+        Value *instArguments = getLoadStorePointerOperand(instToAnalyze);        
+        const SCEV *scevPtr = SE.getSCEV(instArguments);   
+        
+        outs() << scevPtr-> getSCEVType() << "\n";
+
+        if ((scevPtr->getSCEVType() != SCEVTypes::scAddRecExpr && 
+                scevPtr->getSCEVType() != SCEVTypes::scAddExpr))
+            return nullptr;
+        
+        std::vector<const SCEV *> OperandsLoad = scevPtr->operands();
+        
+        #ifdef DEBUG
+            for (auto op: OperandsLoad)
+                outs() << "Operand: " << *op << "\n";
+        #endif
+        
+        const SCEV *ConstantOfSCEV = OperandsLoad[0];
+        const SCEV *StrideOfSCEV = OperandsLoad[1];            
+
+        const SCEV *CanonicalAddExpr = SE.getAddExpr(ConstantOfSCEV, StrideOfSCEV);       
+        outs() << *CanonicalAddExpr << "\n";
+
+        return CanonicalAddExpr;
+
+    };
+
+    const SCEV *AddRecLoad = getCanonicalAddExpr(inst1); 
+    const SCEV *AddRecStore = getCanonicalAddExpr(inst2); 
+
+    if (!(AddRecLoad && AddRecStore)){
+        #ifdef DEBUG
+            outs() << "Can't find a Canonical Add Expression for inst!" << "\n";
+        #endif
+        return false;
+    }
+
+    const SCEV *delta = SE.getMinusSCEV(AddRecLoad, AddRecStore);
+    
+    #ifdef DEBUG
+        outs() << "Delta: " << *delta << "\n";
+    #endif
+
+    ICmpInst::Predicate Pred = ICmpInst::ICMP_SGE;
+    bool IsAlwaysGE = SE.isKnownPredicate(Pred, AddRecLoad, AddRecStore);
+    
+    #ifdef DEBUG
+        outs() << "Predicate: " << (IsAlwaysGE ? "True" : "False") << "\n";
+    #endif
+
+    auto instructionDependence = DI.depends(inst1, inst2, true);
+
+    outs() << "isDirectionNegative()? " << instructionDependence->isDirectionNegative() << "\n";
+
+    // outs() << (*instructionDependence->getDistance());
+
+    return false;
+
+}
+
 bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, DependenceInfo &DI)
 {
     // get all the loads and stores
-    std::vector<Value*> loads;
-    std::vector<Value*> stores;
+    std::vector<Value*> loadsvector;
+    std::vector<Value*> storesvector;
 
-    auto collectLoadStores = [&loads, &stores] (Loop *l) {
-        for (auto BI = l->block_begin(); BI != l->block_end(); ++BI)
-        {
+    //Lambda function. This collect loads and stores in vectors 
+    auto collectLoadStores = [&loadsvector, &storesvector] (Loop *l) {
+        for (auto BI = l->block_begin(); BI != l->block_end(); ++BI) {
+            
             BasicBlock *BB = *BI;
-            for (auto i = BB->begin(); i != BB->end(); i++)
-            {
+
+            for (auto i = BB->begin(); i != BB->end(); i++) {
                 Instruction *inst = dyn_cast<Instruction>(i);
-                if (!inst)
+
+                if (inst){
+                    if (isa<StoreInst>(inst))
+                        storesvector.push_back(inst);
+                    if (isa<LoadInst>(inst))
+                        loadsvector.push_back(inst);
+                }
+                else
                     continue;
-                if (isa<StoreInst>(inst))
-                    stores.push_back(inst);
-                else if (isa<LoadInst>(inst))
-                    loads.push_back(inst);
-            }
-        }
+
+            }}
     };
     
     collectLoadStores(l1);
     collectLoadStores(l2);
-    
-    ICmpInst::Predicate Pred = ICmpInst::ICMP_SGE;
 
-    /*
-    for (auto val1: loads){
-        const SCEV *scevPtr1 = SE.getSCEVAtScope(val1, l1);
-        outs() << *val1 << "\n";
-        outs() << *scevPtr1 << "\n";
-
-        std::vector<const SCEV *> Operands1 = scevPtr1->operands();
-        for (auto op: Operands1)
-            outs() << "Operand: " << *op << "\n";
-        const SCEV * C1 = Operands1[0];
-        const SCEV * Stride = Operands1[1];
-
-        if ((scevPtr1->getSCEVType() != SCEVTypes::scAddRecExpr))
-            continue;
-        const SCEV *AddRec1 = SE.getAddExpr(C1, Stride);
-        outs() << *AddRec1 << "\n";
-
-        for (auto val2: stores){
-            outs() << "Checking predicates\n";
-            const SCEV *scevPtr2 = SE.getSCEVAtScope(val2, l2);
-            outs() << *val2 << "\n";
-            outs() << *scevPtr2 << "\n";
-            bool IsAlwaysGE = SE.isKnownPredicate(Pred, scevPtr1, scevPtr2);
-            outs() << "Predicate: " << (IsAlwaysGE?"True":"False") << "\n";
-        }
-    }
-    */
-
-    #ifdef DEBUG
-    outs() << "\n Stampa delle load \n";
-    for(auto i : loads){
-        outs() << *i << "\n";
-    }
-    outs() << "\n Stampa delle store \n";
-    for(auto i : stores){
-        outs() << *i << "\n";
-    }
+    #ifdef DEBUG        
+        outs() << "\n Stampa delle load \n";
+        for(auto i : loadsvector)   
+            {outs() << *i << "\n";}
+        
+        outs() << "\n Stampa delle store \n";    
+        for(auto i : storesvector)  
+            {outs() << *i << "\n";}
     #endif
 
-    for (auto val1: loads){
+    for (auto val1: loadsvector){
         Instruction *inst1 = dyn_cast<Instruction>(val1);
-        for (auto val2: stores){
+        for (auto val2: storesvector){
             Instruction *inst2 = dyn_cast<Instruction>(val2);
-            auto dep = DI.depends(inst1, inst2, true);
+            
+            auto instructionDependence = DI.depends(inst1, inst2, true);
 
             #ifdef DEBUG
-                outs() << "Checking " << *val1 << " " << *val2 << " dep? " << (dep ? "True" : "False") << "\n";
+                outs() << "Checking " << *val1 << " " << *val2 << " dep? " << (instructionDependence ? "True" : "False") << "\n";
             #endif
-        
-            if (dep){
-/*                 if(!dep->isInput() && !dep->isOutput()){
 
-                    Value *loadvalue = getLoadStorePointerOperand(inst1);
-                    const SCEV *scev1 = SE.getSCEV(loadvalue);
-                    Value *storevalue = getLoadStorePointerOperand(inst2);
-                    const SCEV *scev2 = SE.getSCEV(storevalue);
-
-                    outs() << "scev 1: " << *scev1 << " " << "\n" << "scev 2: " << *scev2 << "\n";
-                    bool IsAlwaysGE = SE.isKnownPredicate(Pred, scev1, scev2);
-                    outs() << "Predicate: " << (IsAlwaysGE ? "True" : "False") << "\n";
-                    const SCEV *diff = SE.getMinusSCEV(scev1, scev2);
-                    // const SCEV *diff = SE.getAddExpr(scev1, SE.getNegativeSCEV(scev2));
-                    outs() << *diff << "\n";
-                    return false;
-                } */
+            if (instructionDependence
+                && !instructionDependence->isInput()
+                && !instructionDependence->isOutput()) {
                 
-                if(!dep->isInput() && !dep->isOutput()){
-                    ICmpInst::Predicate Pred = ICmpInst::ICMP_SGE;
-                    Value *loadArg = getLoadStorePointerOperand(inst1);
-                    const SCEV *scevPtrLoad = SE.getSCEV(loadArg);
-                    Value *storeArg = getLoadStorePointerOperand(inst2);
-                    const SCEV *scevPtrStore = SE.getSCEV(storeArg);
-                    outs() << "Load SCVEV " << *scevPtrLoad << "\n";
-                    outs() << "Store SCVEV " << *scevPtrStore << "\n";
-
-                    std::vector<const SCEV *> OperandsLoad = scevPtrLoad->operands();
-                    for (auto op: OperandsLoad)
-                        outs() << "Operand: " << *op << "\n";
-                    const SCEV * C1 = OperandsLoad[0];
-                    const SCEV * Stride1 = OperandsLoad[1];
-                    if ((scevPtrLoad->getSCEVType() != SCEVTypes::scAddRecExpr))
-                        continue;
-                    const SCEV *AddRecLoad = SE.getAddExpr(C1, Stride1);
-                    outs() << *AddRecLoad << "\n";
+                // If !isDistancePositive, then there is a negative dependency, so return false
+                if (!isDistancePositive(inst1, inst2, SE, DI)){
+                    // outs() << "isDirectionNegative()? " << instructionDependence->isDirectionNegative() << "\n";
                     
-                    std::vector<const SCEV *> OperandsStore = scevPtrStore->operands();
-                    for (auto op: OperandsStore)
-                        outs() << "Operand: " << *op << "\n";
-                    const SCEV * C2 = OperandsStore[0];
-                    const SCEV * Stride2 = OperandsStore[1];
-                    if ((scevPtrStore->getSCEVType() != SCEVTypes::scAddRecExpr))
-                        continue;
-                    const SCEV *AddRecStore = SE.getAddExpr(C2, Stride2);
-                    outs() << *AddRecStore << "\n";
-
-                    const SCEV *delta = SE.getMinusSCEV(AddRecLoad, AddRecStore);
-                    outs() << "Delta: " << *delta << "\n";
-                    bool IsAlwaysGE = SE.isKnownPredicate(Pred, AddRecLoad, AddRecStore);
-                    outs() << "Predicate: " << (IsAlwaysGE?"True":"False") << "\n";
                     return false;
-
-
-                    //TODO: find a more decent predicate for SCEV
                 }
+
             }
         }
     }
