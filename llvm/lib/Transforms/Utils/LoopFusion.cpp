@@ -112,7 +112,14 @@ bool isDistancePositive (Instruction *inst1, Instruction *inst2, ScalarEvolution
 
     outs() << "isDirectionNegative()? " << instructionDependence->isDirectionNegative() << "\n";
 
-    // outs() << (*instructionDependence->getDistance());
+    /*     for(int DependenceLevel = 0; DependenceLevel <= (instructionDependence->getLevels() ? instructionDependence->getLevels() : 0) ; DependenceLevel++){
+        outs() << "Stampa del livello " << DependenceLevel << ": ";
+        if (*instructionDependence->getDistance(DependenceLevel) != nullptr)
+            outs() << *instructionDependence->getDistance(DependenceLevel) << "\n";
+        else 
+            outs() << "Distance not found!\n";
+    } */
+    outs() << "normalize()? " << instructionDependence->normalize(&SE) << "\n";
 
     return false;
 
