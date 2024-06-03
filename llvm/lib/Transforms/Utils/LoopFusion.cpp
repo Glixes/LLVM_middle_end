@@ -54,60 +54,60 @@ bool areFlowEquivalent (Loop *l1, Loop *l2, DominatorTree *DT, PostDominatorTree
 }
 
 
-bool isDistancePositive (Instruction *inst1, Instruction *inst2, ScalarEvolution &SE, DependenceInfo DI){
+bool isDistancePositive (Instruction *inst1, Instruction *inst2, Loop *loop1, Loop *loop2, ScalarEvolution &SE, DependenceInfo DI){
 
     // This lambda return CanonicalAddExpr (or something better if it exists)
-    auto getCanonicalAddExpr = [&SE](Instruction *instToAnalyze) -> const SCEV * {
+    auto getSCEVExpr = [&SE](Instruction *instToAnalyze, Loop *loop) -> const SCEVAddRecExpr* {
         
         Value *instArguments = getLoadStorePointerOperand(instToAnalyze);        
-        const SCEV *scevPtr = SE.getSCEV(instArguments);   
-        
-        outs() << scevPtr-> getSCEVType() << "\n";
+        const SCEV *scevPtr = SE.getSCEVAtScope(instArguments, loop);   
+
+        #ifdef DEBUG
+            outs() << "SCEV: " << *scevPtr << "\n";
+            outs() << "Type: " << scevPtr->getSCEVType() << "\n";
+        #endif
 
         if ((scevPtr->getSCEVType() != SCEVTypes::scAddRecExpr && 
                 scevPtr->getSCEVType() != SCEVTypes::scAddExpr))
             return nullptr;
         
-        std::vector<const SCEV *> OperandsLoad = scevPtr->operands();
+        std::vector<const SCEV *> Operands = scevPtr->operands();
         
         #ifdef DEBUG
-            for (auto op: OperandsLoad)
+            for (auto op: Operands)
                 outs() << "Operand: " << *op << "\n";
         #endif
         
-        const SCEV *ConstantOfSCEV = OperandsLoad[0];
-        const SCEV *StrideOfSCEV = OperandsLoad[1];            
+        //const SCEV *ConstantOfSCEV = Operands[0];
+        //const SCEV *StrideOfSCEV = Operands[1];  
 
-        const SCEV *CanonicalAddExpr = SE.getAddExpr(ConstantOfSCEV, StrideOfSCEV);       
+        SmallPtrSet<const SCEVPredicate *, 4> Preds;
+        const SCEVAddRecExpr *CanonicalAddExpr = SE.convertSCEVToAddRecWithPredicates(scevPtr, loop, Preds);       
         outs() << *CanonicalAddExpr << "\n";
 
         return CanonicalAddExpr;
-
     };
 
-    const SCEV *AddRecLoad = getCanonicalAddExpr(inst1); 
-    const SCEV *AddRecStore = getCanonicalAddExpr(inst2); 
-
-    if (!(AddRecLoad && AddRecStore)){
+    const SCEVAddRecExpr *loadSCEV = getSCEVExpr(inst1, loop1); 
+    const SCEVAddRecExpr *storeSCEV = getSCEVExpr(inst2, loop2); 
+    
+    if (!(loadSCEV && storeSCEV)){
         #ifdef DEBUG
             outs() << "Can't find a Canonical Add Expression for inst!" << "\n";
         #endif
         return false;
     }
 
-    const SCEV *delta = SE.getMinusSCEV(AddRecLoad, AddRecStore);
-    
     #ifdef DEBUG
-        outs() << "Delta: " << *delta << "\n";
+        outs() << "Load step recurrence: " << *loadSCEV->getStepRecurrence(SE) << "\n";
+        outs() << "Store step recurrence: " << *storeSCEV->getStepRecurrence(SE) << "\n";
     #endif
 
     ICmpInst::Predicate Pred = ICmpInst::ICMP_SGE;
-    bool IsAlwaysGE = SE.isKnownPredicate(Pred, AddRecLoad, AddRecStore);
-    bool IsAlwaysGEDelta = SE.isKnownPredicate(Pred, delta, SE.getZero(IntegerType::get(inst1->getContext(), 32)));
+    bool IsAlwaysGE = SE.isKnownPredicate(Pred, storeSCEV, loadSCEV);
     
     #ifdef DEBUG
-        outs() << "Predicate: " << (IsAlwaysGE ? "True" : "False") << "\n";
-        outs() << "Delta predicate: " << (IsAlwaysGEDelta ? "True" : "False") << "\n";
+        outs() << "Predicate 'always store >= load': " << (IsAlwaysGE ? "True" : "False") << "\n";
     #endif
 
     auto instructionDependence = DI.depends(inst1, inst2, true);
@@ -118,11 +118,12 @@ bool isDistancePositive (Instruction *inst1, Instruction *inst2, ScalarEvolution
     return IsAlwaysGE;
 }
 
+
 bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, DependenceInfo &DI)
 {
     // get all the loads and stores
-    std::vector<Value*> loadsvector;
-    std::vector<Value*> storesvector;
+    std::vector<std::pair<Value*, Loop*>> loadsvector;
+    std::vector<std::pair<Value*, Loop*>> storesvector;
 
     //Lambda function. This collect loads and stores in vectors 
     auto collectLoadStores = [&loadsvector, &storesvector] (Loop *l) {
@@ -135,9 +136,9 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
 
                 if (inst){
                     if (isa<StoreInst>(inst))
-                        storesvector.push_back(inst);
+                        storesvector.push_back(std::pair(inst, l));
                     if (isa<LoadInst>(inst))
-                        loadsvector.push_back(inst);
+                        loadsvector.push_back(std::pair(inst,l));
                 }
                 else
                     continue;
@@ -149,24 +150,25 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
     collectLoadStores(l2);
 
     #ifdef DEBUG        
-        outs() << "\n Stampa delle load \n";
+        outs() << "\n Loads dump \n";
         for(auto i : loadsvector)   
-            {outs() << *i << "\n";}
+            {outs() << *i.first << "\n";}
         
-        outs() << "\n Stampa delle store \n";    
+        outs() << "\n Stores dump \n";    
         for(auto i : storesvector)  
-            {outs() << *i << "\n";}
+            {outs() << *i.first << "\n";}
     #endif
 
     for (auto val1: loadsvector){
-        Instruction *inst1 = dyn_cast<Instruction>(val1);
+        Instruction *inst1 = dyn_cast<Instruction>(val1.first);
         for (auto val2: storesvector){
-            Instruction *inst2 = dyn_cast<Instruction>(val2);
+            Instruction *inst2 = dyn_cast<Instruction>(val2.first);
             
             auto instructionDependence = DI.depends(inst1, inst2, true);
 
             #ifdef DEBUG
-                outs() << "Checking " << *val1 << " " << *val2 << " dep? " << (instructionDependence ? "True" : "False") << "\n";
+                outs() << "Checking " << *val1.first << " " << *val2.first << " dep? " <<
+                    (instructionDependence ? "True" : "False") << "\n";
             #endif
 
             if (instructionDependence
@@ -174,7 +176,7 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
                 && !instructionDependence->isOutput()) {
                 
                 // If !isDistancePositive, then there is a negative dependency, so return false
-                if (!isDistancePositive(inst1, inst2, SE, DI)){
+                if (!isDistancePositive(inst1, inst2, val1.second, val2.second, SE, DI)){
                     // outs() << "isDirectionNegative()? " << instructionDependence->isDirectionNegative() << "\n";
                     
                     return false;
@@ -261,7 +263,6 @@ void fuseLoop (Loop *l1, Loop *l2)
 
 PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
 {
-    outs() << "before all\n";
     LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
     ScalarEvolution &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
     DominatorTree &DT = AM.getResult<DominatorTreeAnalysis>(F);
@@ -270,15 +271,11 @@ PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
 
     SmallVector<Loop *, 4> loops_forest = LI.getLoopsInPreorder();
 
-    outs() << "before all\n";
-
     if (loops_forest.size() <= 1)
         return PreservedAnalyses::all();
 
     std::unordered_map<unsigned, Loop*> last_loop_at_level;
     last_loop_at_level[loops_forest[0]->getLoopDepth()] = loops_forest[0];
-
-    outs() << "before loop\n";
 
 
     bool fusion_happened = false;
@@ -303,6 +300,9 @@ PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
             {
                 fuseLoop(l1, l2);
                 fusion_happened = true;
+                #ifdef DEBUG
+                    outs() << "Fusion done\n";
+                #endif
                 break;
             }
         }
