@@ -124,13 +124,12 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
 
     const SCEV *stride = stride1;
     const SCEV *delta = SE.getMinusSCEV(C1, C2);
-    const SCEV *dependence_dist = SE.getMinusOne(stride->getType());
+    const SCEV *dependence_dist = nullptr;
     
-    // Can we compute distance?
-    if (isa<SCEVConstant>(delta) && isa<SCEVConstant>(stride1)) {
-        if (SE.isKnownNegative(stride))
-            stride = SE.getNegativeSCEV(stride);
-        outs() << "Stride: " << *stride <<", Delta: " << *delta << "\n";
+    // can we compute distance?
+    if (isa<SCEVConstant>(delta) && isa<SCEVConstant>(stride)) {
+        outs() << "Stride: " << *stride << ", delta: " << *delta << "\n";
+        // TODO find a method to compute 1/stride, for now the multiplication just allows to keep track of the stride sign 
         dependence_dist = SE.getMulExpr(delta, stride);
         outs() << "Dependence distance: " << *dependence_dist << "\n";
     }
