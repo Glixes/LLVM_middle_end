@@ -54,9 +54,9 @@ bool areFlowEquivalent (Loop *l1, Loop *l2, DominatorTree *DT, PostDominatorTree
 }
 
 
-bool isDistancePositive (Instruction *inst1, Instruction *inst2, Loop *loop1, Loop *loop2, ScalarEvolution &SE, DependenceInfo DI){
+bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Loop *loop2, ScalarEvolution &SE, DependenceInfo DI){
 
-    // This lambda return CanonicalAddExpr (or something better if it exists)
+    // This lambda returns CanonicalAddExpr (or something better if it exists)
     auto getSCEVExpr = [&SE](Instruction *instToAnalyze, Loop *loop) -> const SCEVAddRecExpr* {
         
         Value *instArguments = getLoadStorePointerOperand(instToAnalyze);        
@@ -89,33 +89,65 @@ bool isDistancePositive (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
     };
 
     const SCEVAddRecExpr *loadSCEV = getSCEVExpr(inst1, loop1); 
-    const SCEVAddRecExpr *storeSCEV = getSCEVExpr(inst2, loop2); 
+    const SCEVAddRecExpr *storeSCEV = getSCEVExpr(inst2, loop2);
     
     if (!(loadSCEV && storeSCEV)){
         #ifdef DEBUG
             outs() << "Can't find a Canonical Add Expression for inst!" << "\n";
         #endif
-        return false;
+        return true;
     }
 
-    #ifdef DEBUG
-        outs() << "Load step recurrence: " << *loadSCEV->getStepRecurrence(SE) << "\n";
-        outs() << "Store step recurrence: " << *storeSCEV->getStepRecurrence(SE) << "\n";
-    #endif
-
-    ICmpInst::Predicate Pred = ICmpInst::ICMP_SGE;
-    bool IsAlwaysGE = SE.isKnownPredicate(Pred, storeSCEV, loadSCEV);
-    
-    #ifdef DEBUG
-        outs() << "Predicate 'always store >= load': " << (IsAlwaysGE ? "True" : "False") << "\n";
-    #endif
-
+    // dependence analysis
     auto instructionDependence = DI.depends(inst1, inst2, true);
 
     outs() << "isDirectionNegative()? " << instructionDependence->isDirectionNegative() << "\n";
     outs() << "normalize()? " << instructionDependence->normalize(&SE) << "\n";
 
-    return IsAlwaysGE;
+    // strong SIV test
+    const SCEV* C1 = storeSCEV->getStart();
+    const SCEV* C2 = loadSCEV->getStart();
+    const SCEV* stride1 = storeSCEV->getStepRecurrence(SE);
+    const SCEV* stride2 = loadSCEV->getStepRecurrence(SE);
+
+    #ifdef DEBUG
+        outs() << "Store start: " << *C1 << "\n";
+        outs() << "Load start: " << *C2 << "\n";
+        outs() << "Store step recurrence: " << *stride1 << "\n";
+        outs() << "Load step recurrence: " << *stride2 << "\n";
+    #endif
+
+    if (!SE.isKnownNonZero(stride1) || stride1 != stride2){
+        outs() << "Cannot compute distance\n";
+        return true;
+    }
+
+    const SCEV *stride = stride1;
+    const SCEV *delta = SE.getMinusSCEV(C1, C2);
+    const SCEV *dependence_dist = SE.getMinusOne(stride->getType());
+    
+    // Can we compute distance?
+    if (isa<SCEVConstant>(delta) && isa<SCEVConstant>(stride1)) {
+        if (SE.isKnownNegative(stride))
+            stride = SE.getNegativeSCEV(stride);
+        outs() << "Stride: " << *stride <<", Delta: " << *delta << "\n";
+        dependence_dist = SE.getMulExpr(delta, stride);
+        outs() << "Dependence distance: " << *dependence_dist << "\n";
+    }
+    else{
+        outs() << "Cannot compute distance\n";
+        return true;
+    }
+        
+    bool IsAlwaysGE = SE.isKnownPredicate(ICmpInst::ICMP_SGE, storeSCEV, loadSCEV);
+    bool IsDistLT0 = SE.isKnownPredicate(ICmpInst::ICMP_SLT, dependence_dist, SE.getZero(stride->getType()));
+    
+    #ifdef DEBUG
+        outs() << "Predicate 'always store >= load': " << (IsAlwaysGE ? "True" : "False") << "\n";
+        outs() << "Predicate 'dependence dist < 0': " << (IsDistLT0 ? "True" : "False") << "\n";
+    #endif
+
+    return IsDistLT0;
 }
 
 
@@ -175,8 +207,8 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
                 && !instructionDependence->isInput()
                 && !instructionDependence->isOutput()) {
                 
-                // If !isDistancePositive, then there is a negative dependency, so return false
-                if (!isDistancePositive(inst1, inst2, val1.second, val2.second, SE, DI)){
+                // If isDistanceNegative, then there is a negative distance dependency, so return false
+                if (isDistanceNegative(inst1, inst2, val1.second, val2.second, SE, DI)){
                     // outs() << "isDirectionNegative()? " << instructionDependence->isDirectionNegative() << "\n";
                     
                     return false;
@@ -298,11 +330,10 @@ PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
                 areFlowEquivalent(l1, l2, &DT, &PDT) && 
                 areDistanceIndependent(l1, l2, SE, DI))
             {
+                outs() << "Starting fusion ...\n";
                 fuseLoop(l1, l2);
                 fusion_happened = true;
-                #ifdef DEBUG
-                    outs() << "Fusion done\n";
-                #endif
+                outs() << "Fusion done\n";
                 break;
             }
         }
