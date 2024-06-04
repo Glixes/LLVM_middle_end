@@ -54,7 +54,7 @@ bool areFlowEquivalent (Loop *l1, Loop *l2, DominatorTree *DT, PostDominatorTree
 }
 
 
-bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Loop *loop2, ScalarEvolution &SE, DependenceInfo DI){
+bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Loop *loop2, ScalarEvolution &SE, DependenceInfo &DI){
 
     // This lambda returns CanonicalAddExpr (or something better if it exists)
     auto getSCEVExpr = [&SE](Instruction *instToAnalyze, Loop *loop) -> const SCEVAddRecExpr* {
@@ -153,23 +153,26 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
 bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, DependenceInfo &DI)
 {
     // get all the loads and stores
-    std::vector<std::pair<Value*, Loop*>> loadsvector;
-    std::vector<std::pair<Value*, Loop*>> storesvector;
+    std::vector<Value*> loads1;
+    std::vector<Value*> stores1;
+    std::vector<Value*> loads2;
+    std::vector<Value*> stores2;
 
     //Lambda function. This collect loads and stores in vectors 
-    auto collectLoadStores = [&loadsvector, &storesvector] (Loop *l) {
+    auto collectLoadStores = [] (std::vector<Value*> *loads, std::vector<Value*> *stores, Loop *l) {
         for (auto BI = l->block_begin(); BI != l->block_end(); ++BI) {
             
             BasicBlock *BB = *BI;
 
             for (auto i = BB->begin(); i != BB->end(); i++) {
                 Instruction *inst = dyn_cast<Instruction>(i);
+                outs() << "\n Instruction inspected "<< *inst <<" \n";
 
                 if (inst){
                     if (isa<StoreInst>(inst))
-                        storesvector.push_back(std::pair(inst, l));
+                        stores->push_back(inst);
                     if (isa<LoadInst>(inst))
-                        loadsvector.push_back(std::pair(inst,l));
+                        loads->push_back(inst);
                 }
                 else
                     continue;
@@ -177,28 +180,32 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
             }}
     };
     
-    collectLoadStores(l1);
-    collectLoadStores(l2);
+    collectLoadStores(&loads1, &stores1, l1);
+    collectLoadStores(&loads2, &stores2, l2);
 
     #ifdef DEBUG        
         outs() << "\n Loads dump \n";
-        for(auto i : loadsvector)   
-            {outs() << *i.first << "\n";}
+        for(auto i : loads1)   
+            {outs() << *i << "\n";}
+        for(auto i : loads2)   
+            {outs() << *i << "\n";}
         
         outs() << "\n Stores dump \n";    
-        for(auto i : storesvector)  
-            {outs() << *i.first << "\n";}
+        for(auto i : stores1)  
+            {outs() << *i << "\n";}
+        for(auto i : stores2)  
+            {outs() << *i << "\n";}
     #endif
 
-    for (auto val1: loadsvector){
-        Instruction *inst1 = dyn_cast<Instruction>(val1.first);
-        for (auto val2: storesvector){
-            Instruction *inst2 = dyn_cast<Instruction>(val2.first);
+    for (auto load: loads1){
+        Instruction *loadInst = dyn_cast<Instruction>(load);
+        for (auto store: stores2){
+            Instruction *storeInst = dyn_cast<Instruction>(store);
             
-            auto instructionDependence = DI.depends(inst1, inst2, true);
+            auto instructionDependence = DI.depends(loadInst, storeInst, true);
 
             #ifdef DEBUG
-                outs() << "Checking " << *val1.first << " " << *val2.first << " dep? " <<
+                outs() << "Checking " << *load << " " << *store << " dep? " <<
                     (instructionDependence ? "True" : "False") << "\n";
             #endif
 
@@ -207,12 +214,11 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
                 && !instructionDependence->isOutput()) {
                 
                 // If isDistanceNegative, then there is a negative distance dependency, so return false
-                if (isDistanceNegative(inst1, inst2, val1.second, val2.second, SE, DI)){
+                if (isDistanceNegative(loadInst, storeInst, l1, l2, SE, DI)){
                     // outs() << "isDirectionNegative()? " << instructionDependence->isDirectionNegative() << "\n";
                     
                     return false;
                 }
-
             }
         }
     }
