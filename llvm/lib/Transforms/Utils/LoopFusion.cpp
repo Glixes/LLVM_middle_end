@@ -166,8 +166,6 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
 
             for (auto i = BB->begin(); i != BB->end(); i++) {
                 Instruction *inst = dyn_cast<Instruction>(i);
-                outs() << "\n Instruction inspected "<< *inst <<" \n";
-
                 if (inst){
                     if (isa<StoreInst>(inst))
                         stores->push_back(inst);
@@ -197,12 +195,12 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
             {outs() << *i << "\n";}
     #endif
 
-    for (auto load: loads1){
-        Instruction *loadInst = dyn_cast<Instruction>(load);
-        for (auto store: stores2){
-            Instruction *storeInst = dyn_cast<Instruction>(store);
+    for (auto store: stores1){
+        Instruction *storeInst = dyn_cast<Instruction>(store);
+        for (auto load: loads2){
+            Instruction *loadInst = dyn_cast<Instruction>(load);
             
-            auto instructionDependence = DI.depends(loadInst, storeInst, true);
+            auto instructionDependence = DI.depends(storeInst, loadInst, true);
 
             #ifdef DEBUG
                 outs() << "Checking " << *load << " " << *store << " dep? " <<
@@ -214,7 +212,7 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
                 && !instructionDependence->isOutput()) {
                 
                 // If isDistanceNegative, then there is a negative distance dependency, so return false
-                if (isDistanceNegative(loadInst, storeInst, l1, l2, SE, DI)){
+                if (isDistanceNegative(loadInst, storeInst, l2, l1, SE, DI)){
                     // outs() << "isDirectionNegative()? " << instructionDependence->isDirectionNegative() << "\n";
                     
                     return false;
