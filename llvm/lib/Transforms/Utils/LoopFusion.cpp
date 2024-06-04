@@ -12,6 +12,13 @@
 
 using namespace llvm;
 
+/** Returns true if the loops are adjacent, i.e. the exit block of the first loop is the preheader 
+ * of the second one (or the guard block if the loop is guarded). Otherwise, it returns false.
+ * 
+ * @param l1 loop 1
+ * @param l2 loop 2
+ * @return bool
+*/
 bool areAdjacent (Loop *l1, Loop *l2)
 {
     // check for all the exiting blocks of l1
@@ -26,6 +33,14 @@ bool areAdjacent (Loop *l1, Loop *l2)
 }
 
 
+/** @brief Returns true if the loops have the same number of iterations.
+ * Otherwise, it returns false. The number of iterations is computed based on the number of backedges taken.
+ * 
+ * @param l1 loop 1
+ * @param l2 loop 2
+ * @param SE scalar evolution
+ * @return bool
+*/
 bool haveSameIterationsNumber (Loop *l1, Loop *l2, ScalarEvolution *SE)
 {
     auto getTripCount = [SE] (Loop *l) -> const SCEV *
@@ -45,6 +60,16 @@ bool haveSameIterationsNumber (Loop *l1, Loop *l2, ScalarEvolution *SE)
 }
 
 
+/** @brief Returns true if the loops are control flow equivalent.
+ * I.e. when l1 executes, also l2 executes and when l2 executes also l1 executes.
+ * Otherwise, it returns false.
+ * 
+ * @param l1 loop 1
+ * @param l2 loop 2
+ * @param DT domiator tree
+ * @param PDT post dominator tree
+ * @return bool
+*/
 bool areFlowEquivalent (Loop *l1, Loop *l2, DominatorTree *DT, PostDominatorTree *PDT)
 {
     BasicBlock *B1 = l1->getHeader();
@@ -54,7 +79,9 @@ bool areFlowEquivalent (Loop *l1, Loop *l2, DominatorTree *DT, PostDominatorTree
 }
 
 
-bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Loop *loop2, ScalarEvolution &SE, DependenceInfo DI){
+bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Loop *loop2, 
+    ScalarEvolution &SE, DependenceInfo DI)
+{
 
     // This lambda returns CanonicalAddExpr (or something better if it exists)
     auto getSCEVExpr = [&SE](Instruction *instToAnalyze, Loop *loop) -> const SCEVAddRecExpr* {
@@ -77,7 +104,10 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
         #endif
 
         SmallPtrSet<const SCEVPredicate *, 4> Preds;
-        const SCEVAddRecExpr *CanonicalAddExpr = SE.convertSCEVToAddRecWithPredicates(scevPtr, loop, Preds);
+
+        const SCEVAddRecExpr *CanonicalAddExpr = (isa<SCEVAddRecExpr>(scevPtr) ? 
+            dyn_cast<SCEVAddRecExpr>(scevPtr) : SE.convertSCEVToAddRecWithPredicates(scevPtr, loop, Preds));       
+
         outs() << *CanonicalAddExpr << "\n";
 
         return CanonicalAddExpr;
@@ -93,7 +123,7 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
         return true;
     }
 
-    // dependence analysis
+    // dependence analysis TOBEREMOVED
     auto instructionDependence = DI.depends(inst1, inst2, true);
 
     #ifdef DEBUG
@@ -225,6 +255,12 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
 }
 
 
+/** @brief Fuses the given loops.
+ * The body of the second loop, after beeing unlinked, is connected after the body of the first loop.
+ * 
+ * @param l1 loop 1
+ * @param l2 loop 2
+*/
 void fuseLoop (Loop *l1, Loop *l2)
 {
     BasicBlock *l2_entry_block = l2->isGuarded() ? l2->getLoopGuardBranch()->getParent() : l2->getLoopPreheader(); 
@@ -240,7 +276,7 @@ void fuseLoop (Loop *l1, Loop *l2)
     index2->replaceAllUsesWith(index1);
 
     /*
-    Get reference to the basic blocks that will undergo relocation.
+    Data structure to get reference to the basic blocks that will undergo relocation.
     */
     struct LoopStructure
     {
@@ -326,8 +362,8 @@ PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
         if (l1 && l1->getParentLoop() == l2->getParentLoop())
         {
             /*
-            Expoliting the logical short-circuit, as soon as one of th functions returns false, 
-            the others remaining checks are not executed and the if statement condition become false.
+            Expoliting the logical short-circuit, as soon as one of the functions returns false, 
+            the others remaining checks are not executed and the if statement condition becomes false.
             */ 
             if (areAdjacent(l1, l2) && 
                 haveSameIterationsNumber(l1, l2, &SE) && 
