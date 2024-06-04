@@ -8,6 +8,7 @@
 #include <llvm/Analysis/ScalarEvolutionExpressions.h>
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
 
+
 #define DEBUG
 
 using namespace llvm;
@@ -52,7 +53,7 @@ bool haveSameIterationsNumber (Loop *l1, Loop *l2, ScalarEvolution *SE)
             outs() << "Trip count of loop " << l->getName() << " could not be computed.";
             return nullptr;
         }
-
+        outs() << "Trip count: " << *trip_count << "\n";
         return trip_count;
     };
 
@@ -78,11 +79,19 @@ bool areFlowEquivalent (Loop *l1, Loop *l2, DominatorTree *DT, PostDominatorTree
     return (DT->dominates(B1, B2) && PDT->dominates(B2, B1));
 }
 
-
+/**
+ * This function returns True if the distance between inst1 and inst2 is Negative. 
+ * 
+ * @param inst1 first instruction to analyze
+ * @param inst2 second instruction to analyze
+ * @param Loop1 Loop that contains first instruction
+ * @param Loop2 Loop that contains second instruction
+ * @param ScalarEvolution
+ * @param DependenceInfo
+*/
 bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Loop *loop2, 
     ScalarEvolution &SE, DependenceInfo DI)
-{
-
+{   
     // This lambda returns CanonicalAddExpr (or something better if it exists)
     auto getSCEVExpr = [&SE](Instruction *instToAnalyze, Loop *loop) -> const SCEVAddRecExpr* {
         
@@ -105,8 +114,7 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
 
         SmallPtrSet<const SCEVPredicate *, 4> Preds;
 
-        const SCEVAddRecExpr *CanonicalAddExpr = (isa<SCEVAddRecExpr>(scevPtr) ? 
-            dyn_cast<SCEVAddRecExpr>(scevPtr) : SE.convertSCEVToAddRecWithPredicates(scevPtr, loop, Preds));       
+        const SCEVAddRecExpr *CanonicalAddExpr = SE.convertSCEVToAddRecWithPredicates(scevPtr, loop, Preds);       
 
         outs() << *CanonicalAddExpr << "\n";
 
@@ -123,7 +131,7 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
         return true;
     }
 
-    // dependence analysis TOBEREMOVED
+    // TODO: dependence analysis TOBEREMOVED?
     auto instructionDependence = DI.depends(inst1, inst2, true);
 
     #ifdef DEBUG
@@ -131,7 +139,7 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
         outs() << "normalize()? " << instructionDependence->normalize(&SE) << "\n";
     #endif
 
-    // strong SIV test
+    // based on strong SIV test
     const SCEV* baseAddressFirstInstruction = storeSCEV->getStart();
     const SCEV* baseAddressSecondInstruction = loadSCEV->getStart();
     const SCEV* strideStore = storeSCEV->getStepRecurrence(SE);
@@ -185,7 +193,7 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
 }
 
 
-bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, DependenceInfo &DI)
+bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, DependenceInfo &DI, LoopInfo &LI)
 {
     // get all the loads and stores
     std::vector<Value*> loads1;
@@ -201,6 +209,7 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
 
             for (auto i = BB->begin(); i != BB->end(); i++) {
                 Instruction *inst = dyn_cast<Instruction>(i);
+
                 if (inst){
                     if (isa<StoreInst>(inst))
                         stores->push_back(inst);
@@ -246,6 +255,10 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
                 && !instructionDependence->isInput()
                 && !instructionDependence->isOutput()) {
                 
+                if(LI.getLoopFor(loadInst->getParent()) != l2 || LI.getLoopFor(storeInst->getParent()) != l1){
+                    return false;
+                }
+
                 // If isDistanceNegative, then there is a negative distance dependency, so return false
                 if (isDistanceNegative(loadInst, storeInst, l2, l1, SE, DI)){
                     // outs() << "isDirectionNegative()? " << instructionDependence->isDirectionNegative() << "\n";
@@ -372,7 +385,7 @@ PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
             if (areAdjacent(l1, l2) && 
                 haveSameIterationsNumber(l1, l2, &SE) && 
                 areFlowEquivalent(l1, l2, &DT, &PDT) && 
-                areDistanceIndependent(l1, l2, SE, DI))
+                areDistanceIndependent(l1, l2, SE, DI, LI))
             {
                 outs() << "Starting fusion ...\n";
                 fuseLoop(l1, l2);
