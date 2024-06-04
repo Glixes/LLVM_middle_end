@@ -12,6 +12,13 @@
 
 using namespace llvm;
 
+/** Returns true if the loops are adjacent, i.e. the exit block of the first loop is the preheader 
+ * of the second one (or the guard block if the loop is guarded). Otherwise, it returns false.
+ * 
+ * @param l1 loop 1
+ * @param l2 loop 2
+ * @return bool
+*/
 bool areAdjacent (Loop *l1, Loop *l2)
 {
     // check for all the exiting blocks of l1
@@ -26,6 +33,14 @@ bool areAdjacent (Loop *l1, Loop *l2)
 }
 
 
+/** @brief Returns true if the loops have the same number of iterations.
+ * Otherwise, it returns false. The number of iterations is computed based on the number of backedges taken.
+ * 
+ * @param l1 loop 1
+ * @param l2 loop 2
+ * @param SE scalar evolution
+ * @return bool
+*/
 bool haveSameIterationsNumber (Loop *l1, Loop *l2, ScalarEvolution *SE)
 {
     auto getTripCount = [SE] (Loop *l) -> const SCEV *
@@ -45,6 +60,16 @@ bool haveSameIterationsNumber (Loop *l1, Loop *l2, ScalarEvolution *SE)
 }
 
 
+/** @brief Returns true if the loops are control flow equivalent.
+ * I.e. when l1 executes, also l2 executes and when l2 executes also l1 executes.
+ * Otherwise, it returns false.
+ * 
+ * @param l1 loop 1
+ * @param l2 loop 2
+ * @param DT domiator tree
+ * @param PDT post dominator tree
+ * @return bool
+*/
 bool areFlowEquivalent (Loop *l1, Loop *l2, DominatorTree *DT, PostDominatorTree *PDT)
 {
     BasicBlock *B1 = l1->getHeader();
@@ -54,7 +79,9 @@ bool areFlowEquivalent (Loop *l1, Loop *l2, DominatorTree *DT, PostDominatorTree
 }
 
 
-bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Loop *loop2, ScalarEvolution &SE, DependenceInfo &DI){
+bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Loop *loop2, 
+    ScalarEvolution &SE, DependenceInfo DI)
+{
 
     // This lambda returns CanonicalAddExpr (or something better if it exists)
     auto getSCEVExpr = [&SE](Instruction *instToAnalyze, Loop *loop) -> const SCEVAddRecExpr* {
@@ -63,26 +90,24 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
         const SCEV *scevPtr = SE.getSCEVAtScope(instArguments, loop);   
 
         #ifdef DEBUG
-            outs() << "SCEV: " << *scevPtr << "\n";
-            outs() << "Type: " << scevPtr->getSCEVType() << "\n";
+            outs() << "SCEV: " << *scevPtr << " with type " << scevPtr->getSCEVType() << "\n";
         #endif
 
-        if ((scevPtr->getSCEVType() != SCEVTypes::scAddRecExpr && 
-                scevPtr->getSCEVType() != SCEVTypes::scAddExpr))
+        if ((scevPtr->getSCEVType() != SCEVTypes::scAddRecExpr && scevPtr->getSCEVType() != SCEVTypes::scAddExpr))
             return nullptr;
         
-        std::vector<const SCEV *> Operands = scevPtr->operands();
+        std::vector<const SCEV *> SCEVOperands = scevPtr->operands();
         
         #ifdef DEBUG
-            for (auto op: Operands)
+            for (auto op: SCEVOperands)
                 outs() << "Operand: " << *op << "\n";
         #endif
-        
-        //const SCEV *ConstantOfSCEV = Operands[0];
-        //const SCEV *StrideOfSCEV = Operands[1];  
 
         SmallPtrSet<const SCEVPredicate *, 4> Preds;
-        const SCEVAddRecExpr *CanonicalAddExpr = SE.convertSCEVToAddRecWithPredicates(scevPtr, loop, Preds);       
+
+        const SCEVAddRecExpr *CanonicalAddExpr = (isa<SCEVAddRecExpr>(scevPtr) ? 
+            dyn_cast<SCEVAddRecExpr>(scevPtr) : SE.convertSCEVToAddRecWithPredicates(scevPtr, loop, Preds));       
+
         outs() << *CanonicalAddExpr << "\n";
 
         return CanonicalAddExpr;
@@ -98,55 +123,65 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
         return true;
     }
 
-    // dependence analysis
+    // dependence analysis TOBEREMOVED
     auto instructionDependence = DI.depends(inst1, inst2, true);
 
-    outs() << "isDirectionNegative()? " << instructionDependence->isDirectionNegative() << "\n";
-    outs() << "normalize()? " << instructionDependence->normalize(&SE) << "\n";
-
-    // strong SIV test
-    const SCEV* C1 = storeSCEV->getStart();
-    const SCEV* C2 = loadSCEV->getStart();
-    const SCEV* stride1 = storeSCEV->getStepRecurrence(SE);
-    const SCEV* stride2 = loadSCEV->getStepRecurrence(SE);
-
     #ifdef DEBUG
-        outs() << "Store start: " << *C1 << "\n";
-        outs() << "Load start: " << *C2 << "\n";
-        outs() << "Store step recurrence: " << *stride1 << "\n";
-        outs() << "Load step recurrence: " << *stride2 << "\n";
+        outs() << "isDirectionNegative()? " << instructionDependence->isDirectionNegative() << "\n";
+        outs() << "normalize()? " << instructionDependence->normalize(&SE) << "\n";
     #endif
 
-    if (!SE.isKnownNonZero(stride1) || stride1 != stride2){
+    // strong SIV test
+    const SCEV* baseAddressFirstInstruction = storeSCEV->getStart();
+    const SCEV* baseAddressSecondInstruction = loadSCEV->getStart();
+    const SCEV* strideStore = storeSCEV->getStepRecurrence(SE);
+    const SCEV* strideLoad = loadSCEV->getStepRecurrence(SE);
+
+    #ifdef DEBUG
+        outs() << "Store start: " << *baseAddressFirstInstruction << "\n";
+        outs() << "Load start: " << *baseAddressSecondInstruction << "\n";
+        outs() << "Store step recurrence: " << *strideStore << "\n";
+        outs() << "Load step recurrence: " << *strideLoad << "\n";
+    #endif
+
+    if (!SE.isKnownNonZero(strideStore) || strideStore != strideLoad){
         outs() << "Cannot compute distance\n";
         return true;
     }
 
-    const SCEV *stride = stride1;
-    const SCEV *delta = SE.getMinusSCEV(C1, C2);
+    const SCEV *instructionsDelta = SE.getMinusSCEV(baseAddressFirstInstruction, baseAddressSecondInstruction);
     const SCEV *dependence_dist = nullptr;
     
     // can we compute distance?
-    if (isa<SCEVConstant>(delta) && isa<SCEVConstant>(stride)) {
-        outs() << "Stride: " << *stride << ", delta: " << *delta << "\n";
-        // TODO find a method to compute 1/stride, for now the multiplication just allows to keep track of the stride sign 
-        dependence_dist = SE.getMulExpr(delta, stride);
+    if (isa<SCEVConstant>(instructionsDelta) && isa<SCEVConstant>(strideStore)) {
+  
+        // The following lines of code return the product of stride and delta. Since we are working with int, there is no way to obtain d = i' - i = (c1 - c2) / stride, the result will be always 0. We left diagnostic print to show how we tried to compute the formula.
+        #ifdef DEBUG
+            //const SCEV *divisionWithStride = SE.getUDivExpr(SE.getOne(strideStore->getType()), strideStore);
+            outs() << "Stride: " << *strideStore << ", delta: " << *instructionsDelta << ". Stride type: "<< *strideStore->getType();
+        #endif
+        
+        //We use the mul to compute the sign. This result is given considered type size too. To obtain a better result, we should divide by 4 to "remove" integer data type size
+        dependence_dist = SE.getMulExpr(instructionsDelta, strideStore);
         outs() << "Dependence distance: " << *dependence_dist << "\n";
+
     }
     else{
         outs() << "Cannot compute distance\n";
         return true;
     }
-        
-    bool IsAlwaysGE = SE.isKnownPredicate(ICmpInst::ICMP_SGE, storeSCEV, loadSCEV);
-    bool IsDistLT0 = SE.isKnownPredicate(ICmpInst::ICMP_SLT, dependence_dist, SE.getZero(stride->getType()));
+    
+    //Only for diagnostic purposes
+    bool isStoreGELoad = SE.isKnownPredicate(ICmpInst::ICMP_SGE, storeSCEV, loadSCEV);
+    
+    bool isLoadGELoad = SE.isKnownPredicate(ICmpInst::ICMP_SLT, dependence_dist, SE.getZero(strideStore->getType()));
     
     #ifdef DEBUG
-        outs() << "Predicate 'always store >= load': " << (IsAlwaysGE ? "True" : "False") << "\n";
-        outs() << "Predicate 'dependence dist < 0': " << (IsDistLT0 ? "True" : "False") << "\n";
+        outs() << "Predicate 'always store >= load': " << (isStoreGELoad ? "True" : "False") << "\n";
+        outs() << "Predicate 'dependence dist < 0': " << (isLoadGELoad ? "True" : "False") << "\n";
     #endif
 
-    return IsDistLT0;
+    return isLoadGELoad;
 }
 
 
@@ -224,6 +259,12 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
 }
 
 
+/** @brief Fuses the given loops.
+ * The body of the second loop, after beeing unlinked, is connected after the body of the first loop.
+ * 
+ * @param l1 loop 1
+ * @param l2 loop 2
+*/
 void fuseLoop (Loop *l1, Loop *l2)
 {
     BasicBlock *l2_entry_block = l2->isGuarded() ? l2->getLoopGuardBranch()->getParent() : l2->getLoopPreheader(); 
@@ -239,7 +280,7 @@ void fuseLoop (Loop *l1, Loop *l2)
     index2->replaceAllUsesWith(index1);
 
     /*
-    Get reference to the basic blocks that will undergo relocation.
+    Data structure to get reference to the basic blocks that will undergo relocation.
     */
     struct LoopStructure
     {
@@ -325,8 +366,8 @@ PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
         if (l1 && l1->getParentLoop() == l2->getParentLoop())
         {
             /*
-            Expoliting the logical short-circuit, as soon as one of th functions returns false, 
-            the others remaining checks are not executed and the if statement condition become false.
+            Expoliting the logical short-circuit, as soon as one of the functions returns false, 
+            the others remaining checks are not executed and the if statement condition becomes false.
             */ 
             if (areAdjacent(l1, l2) && 
                 haveSameIterationsNumber(l1, l2, &SE) && 
