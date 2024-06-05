@@ -22,14 +22,22 @@ using namespace llvm;
 */
 bool areAdjacent (Loop *l1, Loop *l2)
 {
-    // check for all the exiting blocks of l1
+    // check for all the exit blocks of l1
     SmallVector<BasicBlock*, 4> exit_blocks;
 
     l1->getUniqueNonLatchExitBlocks(exit_blocks);
 
     for (BasicBlock *BB : exit_blocks)
     {
-        if (BB != (l2->isGuarded() ? dyn_cast<BasicBlock>(l2->getLoopGuardBranch()) : l2->getLoopPreheader()))
+        #ifdef DEBUG
+            outs() << *BB << "\n";
+            outs() << "BB instruction number " << BB->size() << "\n";
+        #endif
+
+        if (l2->isGuarded() && BB != dyn_cast<BasicBlock>(l2->getLoopGuardBranch()))
+            return false;
+
+        if (BB != l2->getLoopPreheader() || BB->size() > 1)
             return false;
     }
     return true;
