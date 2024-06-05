@@ -24,7 +24,9 @@ bool areAdjacent (Loop *l1, Loop *l2)
 {
     // check for all the exiting blocks of l1
     SmallVector<BasicBlock*, 4> exit_blocks;
+
     l1->getUniqueNonLatchExitBlocks(exit_blocks);
+
     for (BasicBlock *BB : exit_blocks)
     {
         if (BB != (l2->isGuarded() ? dyn_cast<BasicBlock>(l2->getLoopGuardBranch()) : l2->getLoopPreheader()))
@@ -44,8 +46,7 @@ bool areAdjacent (Loop *l1, Loop *l2)
 */
 bool haveSameIterationsNumber (Loop *l1, Loop *l2, ScalarEvolution *SE)
 {
-    auto getTripCount = [SE] (Loop *l) -> const SCEV *
-    {
+    auto getTripCount = [SE] (Loop *l) -> const SCEV * {
         const SCEV *trip_count = SE->getBackedgeTakenCount(l);
 
         if (isa<SCEVCouldNotCompute>(trip_count))
@@ -93,19 +94,19 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
     ScalarEvolution &SE, DependenceInfo DI)
 {   
     // This lambda returns CanonicalAddExpr (or something better if it exists)
-    auto getSCEVExpr = [&SE](Instruction *instToAnalyze, Loop *loop) -> const SCEVAddRecExpr* {
+    auto getSCEVExpr = [&SE](Instruction *instructionToAnalyze, Loop *loopOfTheInstruction) -> const SCEVAddRecExpr* {
         
-        Value *instArguments = getLoadStorePointerOperand(instToAnalyze);        
-        const SCEV *scevPtr = SE.getSCEVAtScope(instArguments, loop);   
+        Value *instructionArguments = getLoadStorePointerOperand(instructionToAnalyze);        
+        const SCEV *SCEVFromInstruction = SE.getSCEVAtScope(instructionArguments, loopOfTheInstruction);   
 
         #ifdef DEBUG
-            outs() << "SCEV: " << *scevPtr << " with type " << scevPtr->getSCEVType() << "\n";
+            outs() << "SCEV: " << *SCEVFromInstruction << " with type " << SCEVFromInstruction->getSCEVType() << "\n";
         #endif
 
-        if ((scevPtr->getSCEVType() != SCEVTypes::scAddRecExpr && scevPtr->getSCEVType() != SCEVTypes::scAddExpr))
+        if ((SCEVFromInstruction->getSCEVType() != SCEVTypes::scAddRecExpr && SCEVFromInstruction->getSCEVType() != SCEVTypes::scAddExpr))
             return nullptr;
         
-        std::vector<const SCEV *> SCEVOperands = scevPtr->operands();
+        std::vector<const SCEV *> SCEVOperands = SCEVFromInstruction->operands();
         
         #ifdef DEBUG
             for (auto op: SCEVOperands)
@@ -114,7 +115,7 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
 
         SmallPtrSet<const SCEVPredicate *, 4> Preds;
 
-        const SCEVAddRecExpr *CanonicalAddExpr = SE.convertSCEVToAddRecWithPredicates(scevPtr, loop, Preds);       
+        const SCEVAddRecExpr *CanonicalAddExpr = SE.convertSCEVToAddRecWithPredicates(SCEVFromInstruction, loopOfTheInstruction, Preds);       
 
         outs() << *CanonicalAddExpr << "\n";
 
@@ -163,7 +164,7 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
     // can we compute distance?
     if (isa<SCEVConstant>(instructionsDelta) && isa<SCEVConstant>(strideStore)) {
   
-        // The following lines of code return the product of stride and delta. Since we are working with int, there is no way to obtain d = i' - i = (c1 - c2) / stride, the result will be always 0. We left diagnostic print to show how we tried to compute the formula.
+        // The following lines of code return the product of stride and delta. Since we are working with int, there is no way to obtain d = i' - i = (c1 - c2) / stride. We left diagnostic print to show how we tried to compute the formula.
         #ifdef DEBUG
             //const SCEV *divisionWithStride = SE.getUDivExpr(SE.getOne(strideStore->getType()), strideStore);
             outs() << "Stride: " << *strideStore << ", delta: " << *instructionsDelta << ". Stride type: "<< *strideStore->getType();
@@ -179,7 +180,7 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
         return true;
     }
     
-    //Only for diagnostic purposes
+    //TODO: Can we remove? Only for diagnostic purposes
     bool isStoreGELoad = SE.isKnownPredicate(ICmpInst::ICMP_SGE, storeSCEV, loadSCEV);
     
     bool isLoadGELoad = SE.isKnownPredicate(ICmpInst::ICMP_SLT, dependence_dist, SE.getZero(strideStore->getType()));
@@ -196,10 +197,7 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
 bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, DependenceInfo &DI, LoopInfo &LI)
 {
     // get all the loads and stores
-    std::vector<Value*> loads1;
-    std::vector<Value*> stores1;
-    std::vector<Value*> loads2;
-    std::vector<Value*> stores2;
+    std::vector<Value*> loadsFirstLoop, storesFirstLoop, loadsSecondLoop, storesSecondLoop;
 
     //Lambda function. This collect loads and stores in vectors 
     auto collectLoadStores = [] (std::vector<Value*> *loads, std::vector<Value*> *stores, Loop *l) {
@@ -222,33 +220,34 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
             }}
     };
     
-    collectLoadStores(&loads1, &stores1, l1);
-    collectLoadStores(&loads2, &stores2, l2);
+    collectLoadStores(&loadsFirstLoop, &storesFirstLoop, l1);
+    collectLoadStores(&loadsSecondLoop, &storesSecondLoop, l2);
 
     #ifdef DEBUG        
         outs() << "\n Loads dump \n";
-        for(auto i : loads1)   
-            {outs() << *i << "\n";}
-        for(auto i : loads2)   
-            {outs() << *i << "\n";}
+        for(auto i : loadsFirstLoop)   
+            outs() << *i << "\n";
+        for(auto i : loadsSecondLoop)   
+            outs() << *i << "\n";
         
         outs() << "\n Stores dump \n";    
-        for(auto i : stores1)  
-            {outs() << *i << "\n";}
-        for(auto i : stores2)  
-            {outs() << *i << "\n";}
+        for(auto i : storesFirstLoop)  
+            outs() << *i << "\n";
+        for(auto i : storesSecondLoop)  
+            outs() << *i << "\n";
     #endif
 
-    for (auto store: stores1){
+    for (auto store: storesFirstLoop){
+
         Instruction *storeInst = dyn_cast<Instruction>(store);
-        for (auto load: loads2){
-            Instruction *loadInst = dyn_cast<Instruction>(load);
+        
+        for (auto load: loadsSecondLoop){
             
+            Instruction *loadInst = dyn_cast<Instruction>(load);
             auto instructionDependence = DI.depends(storeInst, loadInst, true);
 
             #ifdef DEBUG
-                outs() << "Checking " << *load << " " << *store << " dep? " <<
-                    (instructionDependence ? "True" : "False") << "\n";
+                outs() << "Checking " << *load << " " << *store << " dep? " << (instructionDependence ? "True" : "False") << "\n";
             #endif
 
             if (instructionDependence
@@ -261,8 +260,6 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
 
                 // If isDistanceNegative, then there is a negative distance dependency, so return false
                 if (isDistanceNegative(loadInst, storeInst, l2, l1, SE, DI)){
-                    // outs() << "isDirectionNegative()? " << instructionDependence->isDirectionNegative() << "\n";
-                    
                     return false;
                 }
             }
@@ -297,10 +294,7 @@ void fuseLoop (Loop *l1, Loop *l2)
     */
     struct LoopStructure
     {
-        BasicBlock *header;
-        BasicBlock *latch;
-        BasicBlock *body_head;
-        BasicBlock *body_tail;
+        BasicBlock *header, *latch, *body_head, *body_tail;
 
         LoopStructure (Loop *l)
         {
@@ -344,14 +338,13 @@ void fuseLoop (Loop *l1, Loop *l2)
     first_loop->body_tail->getTerminator()->replaceUsesOfWith(first_loop->latch, second_loop->body_head);
     second_loop->body_tail->getTerminator()->replaceUsesOfWith(second_loop->latch, first_loop->latch);
 
-    delete first_loop;
-    delete second_loop;
+    delete first_loop; delete second_loop;
 
     return;
 }
 
 PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
-{
+{   
     LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
     ScalarEvolution &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
     DominatorTree &DT = AM.getResult<DominatorTreeAnalysis>(F);
@@ -363,19 +356,17 @@ PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
     if (loops_forest.size() <= 1)
         return PreservedAnalyses::all();
 
-    std::unordered_map<unsigned, Loop*> last_loop_at_level;
-    last_loop_at_level[loops_forest[0]->getLoopDepth()] = loops_forest[0];
-
+    std::unordered_map<unsigned, Loop*> last_loop_at_level = {{loops_forest[0]->getLoopDepth(), loops_forest[0]}};
 
     bool fusion_happened = false;
+
     for (size_t i = 1; i < loops_forest.size(); i++)
     {
         unsigned loop_depth = loops_forest[i]->getLoopDepth();
         Loop *l1 = last_loop_at_level[loop_depth];
         Loop *l2 = loops_forest[i];
 
-        // check whether l1 exists, i.e. there is a loop at the current loop level that has been visited before
-        // check for the same parent
+        // check whether l1 exists (i.e. there is a loop at the current loop level that has been visited before) and check for the same parent
         if (l1 && l1->getParentLoop() == l2->getParentLoop())
         {
             /*
@@ -394,7 +385,6 @@ PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
                 break;
             }
         }
-        
         last_loop_at_level[loop_depth] = loops_forest[i];
     }
 
