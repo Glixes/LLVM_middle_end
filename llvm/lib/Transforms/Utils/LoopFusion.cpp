@@ -27,6 +27,11 @@ bool areAdjacent (Loop *l1, Loop *l2)
     l1->getUniqueNonLatchExitBlocks(exit_blocks);
     for (BasicBlock *BB : exit_blocks)
     {
+        #ifdef DEBUG
+            outs() << *BB << "\n";
+            outs() << "BB instruction number " << BB->size() << "\n";
+        #endif
+
         if (l2->isGuarded() && BB != dyn_cast<BasicBlock>(l2->getLoopGuardBranch()))
             return false;
 
