@@ -87,12 +87,11 @@ bool areFlowEquivalent (Loop *l1, Loop *l2, DominatorTree *DT, PostDominatorTree
  * @param Loop1 Loop that contains first instruction
  * @param Loop2 Loop that contains second instruction
  * @param ScalarEvolution
- * @param DependenceInfo
 */
-bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Loop *loop2, 
-    ScalarEvolution &SE, DependenceInfo DI)
+bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Loop *loop2, ScalarEvolution &SE)
 {   
-    // This lambda returns CanonicalAddExpr (or something better if it exists)
+    // This lambda returns a polynomial recurrence on the trip count, an object of type SCEVAddRecExpr*,
+    // the reason is that this class offers more utilities than a regular SCEV*
     auto getSCEVExpr = [&SE](Instruction *instToAnalyze, Loop *loop) -> const SCEVAddRecExpr* {
         
         Value *instArguments = getLoadStorePointerOperand(instToAnalyze);        
@@ -102,48 +101,43 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
             outs() << "SCEV: " << *scevPtr << " with type " << scevPtr->getSCEVType() << "\n";
         #endif
 
+        // only convert "compatible" types of SCEV
         if ((scevPtr->getSCEVType() != SCEVTypes::scAddRecExpr && scevPtr->getSCEVType() != SCEVTypes::scAddExpr))
             return nullptr;
         
         std::vector<const SCEV *> SCEVOperands = scevPtr->operands();
         
         #ifdef DEBUG
+            outs() << "Operand: ";
             for (auto op: SCEVOperands)
-                outs() << "Operand: " << *op << "\n";
+                outs() << *op << ", ";
+            outs() << "\n";
         #endif
 
         SmallPtrSet<const SCEVPredicate *, 4> Preds;
-
-        const SCEVAddRecExpr *CanonicalAddExpr = SE.convertSCEVToAddRecWithPredicates(scevPtr, loop, Preds);       
-
-        outs() << *CanonicalAddExpr << "\n";
-
-        return CanonicalAddExpr;
+        const SCEVAddRecExpr *PolRec = SE.convertSCEVToAddRecWithPredicates(scevPtr, loop, Preds);       
+        
+        #ifdef DEBUG
+            outs() << "Polynomial recurrence" << *PolRec << "\n";
+        #endif
+        
+        return PolRec;
     };
 
-    const SCEVAddRecExpr *loadSCEV = getSCEVExpr(inst1, loop1); 
-    const SCEVAddRecExpr *storeSCEV = getSCEVExpr(inst2, loop2);
+    const SCEVAddRecExpr *inst1AddRec = getSCEVExpr(inst1, loop1); 
+    const SCEVAddRecExpr *inst2AddRec = getSCEVExpr(inst2, loop2);
     
-    if (!(loadSCEV && storeSCEV)){
+    if (!(inst1AddRec && inst2AddRec)){
         #ifdef DEBUG
-            outs() << "Can't find a Canonical Add Expression for inst!" << "\n";
+            outs() << "Can't find a polynomial recurrence for inst!\n";
         #endif
         return true;
     }
 
-    // TODO: dependence analysis TOBEREMOVED?
-    auto instructionDependence = DI.depends(inst1, inst2, true);
-
-    #ifdef DEBUG
-        outs() << "isDirectionNegative()? " << instructionDependence->isDirectionNegative() << "\n";
-        outs() << "normalize()? " << instructionDependence->normalize(&SE) << "\n";
-    #endif
-
-    // based on strong SIV test
-    const SCEV* baseAddressFirstInstruction = storeSCEV->getStart();
-    const SCEV* baseAddressSecondInstruction = loadSCEV->getStart();
-    const SCEV* strideStore = storeSCEV->getStepRecurrence(SE);
-    const SCEV* strideLoad = loadSCEV->getStepRecurrence(SE);
+    const SCEV* baseAddressFirstInstruction = inst2AddRec->getStart();
+    const SCEV* baseAddressSecondInstruction = inst1AddRec->getStart();
+    const SCEV* strideStore = inst2AddRec->getStepRecurrence(SE);
+    const SCEV* strideLoad = inst1AddRec->getStepRecurrence(SE);
 
     #ifdef DEBUG
         outs() << "Store start: " << *baseAddressFirstInstruction << "\n";
@@ -157,19 +151,29 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
         return true;
     }
 
+    // delta represents the distance, in number of memory cells, between the starting addresses which are used to access memory
+    // in instruction 1 and 2
     const SCEV *instructionsDelta = SE.getMinusSCEV(baseAddressFirstInstruction, baseAddressSecondInstruction);
     const SCEV *dependence_dist = nullptr;
     
     // can we compute distance?
     if (isa<SCEVConstant>(instructionsDelta) && isa<SCEVConstant>(strideStore)) {
-  
-        // The following lines of code return the product of stride and delta. Since we are working with int, there is no way to obtain d = i' - i = (c1 - c2) / stride, the result will be always 0. We left diagnostic print to show how we tried to compute the formula.
+        
+        // The dependence distance between the two instructions is computed from delta and stride,
+        // using a method inspired from strong SIV tests.
+        //
+        // The formula to apply should be the following:
+        // d = i' - i = (c1 - c2) / stride, as indicated by Absar in "Scalar Evolution Demystified",
+        // but it was decided to skip the division for implementation difficulties,
+        // it was used and use a multiplication instead, so that the "distance" would keep into consideration sign difference
+        // between delta and stride;
+        // this way, the distance is not actually a distance between indexes in access to memory (e.g. A[i] compared to A[i']),
+        // but it is just the delta between starting addresses of the two arrays, but inflated by the absolute value of the stride,
+        // with a sign that is the result of the sign concordance between stride and delta
         #ifdef DEBUG
-            //const SCEV *divisionWithStride = SE.getUDivExpr(SE.getOne(strideStore->getType()), strideStore);
             outs() << "Stride: " << *strideStore << ", delta: " << *instructionsDelta << ". Stride type: "<< *strideStore->getType();
         #endif
         
-        //We use the mul to compute the sign. This result is given considered type size too. To obtain a better result, we should divide by 4 to "remove" integer data type size
         dependence_dist = SE.getMulExpr(instructionsDelta, strideStore);
         outs() << "Dependence distance: " << *dependence_dist << "\n";
 
@@ -179,17 +183,13 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
         return true;
     }
     
-    //Only for diagnostic purposes
-    bool isStoreGELoad = SE.isKnownPredicate(ICmpInst::ICMP_SGE, storeSCEV, loadSCEV);
-    
-    bool isLoadGELoad = SE.isKnownPredicate(ICmpInst::ICMP_SLT, dependence_dist, SE.getZero(strideStore->getType()));
+    bool isDistLT0 = SE.isKnownPredicate(ICmpInst::ICMP_SLT, dependence_dist, SE.getZero(strideStore->getType()));
     
     #ifdef DEBUG
-        outs() << "Predicate 'always store >= load': " << (isStoreGELoad ? "True" : "False") << "\n";
-        outs() << "Predicate 'dependence dist < 0': " << (isLoadGELoad ? "True" : "False") << "\n";
+        outs() << "Predicate 'dependence dist < 0': " << (isDistLT0 ? "True" : "False") << "\n";
     #endif
 
-    return isLoadGELoad;
+    return isDistLT0;
 }
 
 
@@ -260,9 +260,7 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
                 }
 
                 // If isDistanceNegative, then there is a negative distance dependency, so return false
-                if (isDistanceNegative(loadInst, storeInst, l2, l1, SE, DI)){
-                    // outs() << "isDirectionNegative()? " << instructionDependence->isDirectionNegative() << "\n";
-                    
+                if (isDistanceNegative(loadInst, storeInst, l2, l1, SE)){
                     return false;
                 }
             }
