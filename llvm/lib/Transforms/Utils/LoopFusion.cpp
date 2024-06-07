@@ -126,13 +126,15 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
 
         SmallPtrSet<const SCEVPredicate *, 4> Preds;
 
-        const SCEVAddRecExpr *PolRec = SE.convertSCEVToAddRecWithPredicates(SCEVFromInstruction, loopOfTheInstruction, Preds);       
-        
+        const SCEVAddRecExpr *polinomial_recurrence = SE.convertSCEVToAddRecWithPredicates(SCEVFromInstruction, loopOfTheInstruction, Preds);       
+    
         #ifdef DEBUG
-            outs() << "Polynomial recurrence" << *PolRec << "\n";
+            if (polinomial_recurrence)
+                outs() << "Polynomial recurrence " << *polinomial_recurrence << "\n";
         #endif
         
-        return PolRec;
+        return polinomial_recurrence;
+
 
     };
 
@@ -146,30 +148,30 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
         return true;
     }
 
-    const SCEV* baseAddressFirstInstruction = inst2AddRec->getStart();
-    const SCEV* baseAddressSecondInstruction = inst1AddRec->getStart();
-    const SCEV* strideStore = inst2AddRec->getStepRecurrence(SE);
-    const SCEV* strideLoad = inst1AddRec->getStepRecurrence(SE);
+    const SCEV* base_address_first_instruction = inst2AddRec->getStart();
+    const SCEV* base_address_second_instruction = inst1AddRec->getStart();
+    const SCEV* stride_store = inst2AddRec->getStepRecurrence(SE);
+    const SCEV* stride_load = inst1AddRec->getStepRecurrence(SE);
 
     #ifdef DEBUG
-        outs() << "Store start: " << *baseAddressFirstInstruction << "\n";
-        outs() << "Load start: " << *baseAddressSecondInstruction << "\n";
-        outs() << "Store step recurrence: " << *strideStore << "\n";
-        outs() << "Load step recurrence: " << *strideLoad << "\n";
+        outs() << "Store start: " << *base_address_first_instruction << "\n";
+        outs() << "Load start: " << *base_address_second_instruction << "\n";
+        outs() << "Store step recurrence: " << *stride_store << "\n";
+        outs() << "Load step recurrence: " << *stride_load << "\n";
     #endif
 
-    if (!SE.isKnownNonZero(strideStore) || strideStore != strideLoad){
+    if (!SE.isKnownNonZero(stride_store) || stride_store != stride_load){
         outs() << "Cannot compute distance\n";
         return true;
     }
 
     // delta represents the distance, in number of memory cells, between the starting addresses which are used to access memory
     // in instruction 1 and 2
-    const SCEV *instructionsDelta = SE.getMinusSCEV(baseAddressFirstInstruction, baseAddressSecondInstruction);
+    const SCEV *instructions_delta = SE.getMinusSCEV(base_address_first_instruction, base_address_second_instruction);
     const SCEV *dependence_dist = nullptr;
     
     // can we compute distance?
-    if (isa<SCEVConstant>(instructionsDelta) && isa<SCEVConstant>(strideStore)) {
+    if (isa<SCEVConstant>(instructions_delta) && isa<SCEVConstant>(stride_store)) {
 
         // The dependence distance between the two instructions is computed from delta and stride,
         // using a method inspired from strong SIV tests.
@@ -184,10 +186,10 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
         // with a sign that is the result of the sign concordance between stride and delta
       
         #ifdef DEBUG
-            outs() << "Stride: " << *strideStore << ", delta: " << *instructionsDelta << ". Stride type: "<< *strideStore->getType();
+            outs() << "Stride: " << *stride_store << ", delta: " << *instructions_delta << ". Stride type: "<< *stride_store->getType();
         #endif
         
-        dependence_dist = SE.getMulExpr(instructionsDelta, strideStore);
+        dependence_dist = SE.getMulExpr(instructions_delta, stride_store);
         outs() << "Dependence distance: " << *dependence_dist << "\n";
 
     }
@@ -197,7 +199,7 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
     }
     
 
-    bool isDistLT0 = SE.isKnownPredicate(ICmpInst::ICMP_SLT, dependence_dist, SE.getZero(strideStore->getType()));
+    bool isDistLT0 = SE.isKnownPredicate(ICmpInst::ICMP_SLT, dependence_dist, SE.getZero(stride_store->getType()));
     
     #ifdef DEBUG
         outs() << "Predicate 'dependence dist < 0': " << (isDistLT0 ? "True" : "False") << "\n";
@@ -210,7 +212,7 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
 bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, DependenceInfo &DI, LoopInfo &LI)
 {
     // get all the loads and stores
-    std::vector<Value*> loadsFirstLoop, storesFirstLoop, loadsSecondLoop, storesSecondLoop;
+    std::vector<Value*> loads_first_loop, stores_first_loop, loads_second_loop, stores_second_loop;
 
     //Lambda function. This collect loads and stores in vectors 
     auto collectLoadStores = [] (std::vector<Value*> *loads, std::vector<Value*> *stores, Loop *l) {
@@ -233,53 +235,58 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
             }}
     };
     
-    collectLoadStores(&loadsFirstLoop, &storesFirstLoop, l1);
-    collectLoadStores(&loadsSecondLoop, &storesSecondLoop, l2);
+    collectLoadStores(&loads_first_loop, &stores_first_loop, l1);
+    collectLoadStores(&loads_second_loop, &stores_second_loop, l2);
 
     #ifdef DEBUG        
         outs() << "\n Loads dump \n";
-        for(auto i : loadsFirstLoop)   
+        for(auto i : loads_first_loop)   
             outs() << *i << "\n";
-        for(auto i : loadsSecondLoop)   
+        for(auto i : loads_second_loop)   
             outs() << *i << "\n";
         
         outs() << "\n Stores dump \n";    
-        for(auto i : storesFirstLoop)  
+        for(auto i : stores_first_loop)  
             outs() << *i << "\n";
-        for(auto i : storesSecondLoop)  
+        for(auto i : stores_second_loop)  
             outs() << *i << "\n";
     #endif
 
-    for (auto store: storesFirstLoop){
+    auto checkStoreAndLoadDependence = [&DI, &LI, &SE](std::vector<Value*> *store_vector, std::vector<Value*> *load_vector, Loop *store_loop, Loop *load_loop) {
+        for (auto store: *store_vector){
 
-        Instruction *storeInst = dyn_cast<Instruction>(store);
-        
-        for (auto load: loadsSecondLoop){
+            Instruction *store_inst = dyn_cast<Instruction>(store);
             
-            Instruction *loadInst = dyn_cast<Instruction>(load);
-            auto instructionDependence = DI.depends(storeInst, loadInst, true);
-
-            #ifdef DEBUG
-                outs() << "Checking " << *load << " " << *store << " dep? " << (instructionDependence ? "True" : "False") << "\n";
-            #endif
-
-            if (instructionDependence
-                && !instructionDependence->isInput()
-                && !instructionDependence->isOutput()) {
+            for (auto load: *load_vector){
                 
-                if(LI.getLoopFor(loadInst->getParent()) != l2 || LI.getLoopFor(storeInst->getParent()) != l1){
-                    return false;
-                }
+                Instruction *load_inst = dyn_cast<Instruction>(load);
+                auto instruction_dependence = DI.depends(store_inst, load_inst, true);
 
-                // If isDistanceNegative, then there is a negative distance dependency, so return false
+                #ifdef DEBUG
+                    outs() << "Checking " << *load << " " << *store << " dep? " << (instruction_dependence ? "True" : "False") << "\n";
+                #endif
 
-                if (isDistanceNegative(loadInst, storeInst, l2, l1, SE)){
+                if (instruction_dependence) {
+                    
+                    // Check that load and store inst are not part of a nested loop
+                    if(LI.getLoopFor(load_inst->getParent()) != load_loop || LI.getLoopFor(store_inst->getParent()) != store_loop)
+                        return false;
 
-                    return false;
+                    // If isDistanceNegative, then there is a negative distance dependency, so return false
+
+                    if (isDistanceNegative(load_inst, store_inst, load_loop, store_loop, SE))
+                        return false;
+                    
                 }
             }
         }
-    }
+        return true;
+    };
+    
+    if (!checkStoreAndLoadDependence(&stores_first_loop, &loads_second_loop, l1, l2) || 
+        !checkStoreAndLoadDependence(&stores_second_loop, &loads_first_loop, l2, l1) )
+        return false;
+
     return true;
 }
 
