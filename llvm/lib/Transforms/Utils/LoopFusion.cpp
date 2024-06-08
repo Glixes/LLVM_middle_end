@@ -31,10 +31,16 @@ bool areAdjacent (Loop *l1, Loop *l2)
     for (BasicBlock *BB : exit_blocks)
     {
         if (l2->isGuarded() && BB != dyn_cast<BasicBlock>(l2->getLoopGuardBranch()))
+        {
+            outs() << "Second Loop is guarded, exit block of first loop is not equal to entry block of second loop";
             return false;
+        }
 
         if (BB != l2->getLoopPreheader() || BB->size() > 1)
+        {
+            outs() << "exit block of first loop is not equal to entry block of second loop or there are instructions between the loops";
             return false;
+        }
     }
     return true;
 }
