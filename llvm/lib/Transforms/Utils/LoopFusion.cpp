@@ -13,6 +13,7 @@
 
 using namespace llvm;
 
+
 /** Returns true if the loops are adjacent, i.e. the exit block of the first loop is the preheader 
  * of the second one (or the guard block if the loop is guarded). Otherwise, it returns false.
  * 
@@ -29,11 +30,6 @@ bool areAdjacent (Loop *l1, Loop *l2)
 
     for (BasicBlock *BB : exit_blocks)
     {
-        #ifdef DEBUG
-            outs() << *BB << "\n";
-            outs() << "BB instruction number " << BB->size() << "\n";
-        #endif
-
         if (l2->isGuarded() && BB != dyn_cast<BasicBlock>(l2->getLoopGuardBranch()))
             return false;
 
@@ -88,89 +84,97 @@ bool areFlowEquivalent (Loop *l1, Loop *l2, DominatorTree *DT, PostDominatorTree
     return (DT->dominates(B1, B2) && PDT->dominates(B2, B1));
 }
 
+
 /**
- * This function returns True if the distance between inst1 and inst2 is Negative. 
+ * Check if the distance between the memory accesses of two instructions is negative
  * 
  * @param inst1 first instruction to analyze
  * @param inst2 second instruction to analyze
- * @param Loop1 Loop that contains first instruction
- * @param Loop2 Loop that contains second instruction
- * @param ScalarEvolution
+ * @param loop1 Loop that contains first instruction
+ * @param loop2 Loop that contains second instruction
+ * @param SE the scalar evolution
 */
 bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Loop *loop2, ScalarEvolution &SE)
 {   
 
-    // This lambda returns a polynomial recurrence on the trip count, an object of type SCEVAddRecExpr*,
-    // the reason is that this class offers more utilities than a regular SCEV*
-    auto getSCEVExpr = [&SE](Instruction *instructionToAnalyze, Loop *loopOfTheInstruction) -> const SCEVAddRecExpr* {
-        
-        Value *instructionArguments = getLoadStorePointerOperand(instructionToAnalyze);        
-        const SCEV *SCEVFromInstruction = SE.getSCEVAtScope(instructionArguments, loopOfTheInstruction);   
+    // This lambda returns a polynomial recurrence on the trip count, a pointer to an object of type SCEVAddRecExpr,
+    // the reason is that this class offers more utilities than a regular SCEV
+    auto getSCEVAddRec = [&SE](Instruction *instruction_to_analyze, 
+        Loop *loop_of_the_instruction) -> const SCEVAddRecExpr* 
+    {
+        // get GEP instruction
+        Value *instruction_arguments = getLoadStorePointerOperand(instruction_to_analyze);        
+        const SCEV *SCEV_from_instruction = SE.getSCEVAtScope(instruction_arguments, loop_of_the_instruction);   
 
         #ifdef DEBUG
-            outs() << "SCEV: " << *SCEVFromInstruction << " with type " << SCEVFromInstruction->getSCEVType() << "\n";
+            outs() << "SCEV: " << *SCEV_from_instruction << " with type " << SCEV_from_instruction->getSCEVType() << "\n";
         #endif
 
         // only convert "compatible" types of SCEV
-        if ((SCEVFromInstruction->getSCEVType() != SCEVTypes::scAddRecExpr && SCEVFromInstruction->getSCEVType() != SCEVTypes::scAddExpr))
+        if ((SCEV_from_instruction->getSCEVType() != SCEVTypes::scAddRecExpr
+        && SCEV_from_instruction->getSCEVType() != SCEVTypes::scAddExpr))
           return nullptr;
-        
-        std::vector<const SCEV *> SCEVOperands = SCEVFromInstruction->operands();
-        
-        #ifdef DEBUG
-            outs() << "Operand: ";
-            for (auto op: SCEVOperands)
-                outs() << *op << ", ";
-            outs() << "\n";
-        #endif
 
-        SmallPtrSet<const SCEVPredicate *, 4> Preds;
+        SmallPtrSet<const SCEVPredicate *, 4> preds;
 
-        const SCEVAddRecExpr *PolRec = SE.convertSCEVToAddRecWithPredicates(SCEVFromInstruction, loopOfTheInstruction, Preds);       
-        
+        // create polinomial chain of recurrencies
+        const SCEVAddRecExpr *polynomial_recurrence = SE.convertSCEVToAddRecWithPredicates(
+            SCEV_from_instruction, loop_of_the_instruction, preds);       
+    
         #ifdef DEBUG
-            outs() << "Polynomial recurrence" << *PolRec << "\n";
+            if (polynomial_recurrence)
+                outs() << "Polynomial recurrence " << *polynomial_recurrence << "\n";
         #endif
         
-        return PolRec;
+        return polynomial_recurrence;
 
     };
 
-    const SCEVAddRecExpr *inst1AddRec = getSCEVExpr(inst1, loop1); 
-    const SCEVAddRecExpr *inst2AddRec = getSCEVExpr(inst2, loop2);
+    const SCEVAddRecExpr *inst1_add_rec = getSCEVAddRec(inst1, loop1); 
+    const SCEVAddRecExpr *inst2_add_rec = getSCEVAddRec(inst2, loop2);
     
-    if (!(inst1AddRec && inst2AddRec)){
+    if (!(inst1_add_rec && inst2_add_rec)){
         #ifdef DEBUG
             outs() << "Can't find a polynomial recurrence for inst!\n";
         #endif
         return true;
     }
 
-    const SCEV* baseAddressFirstInstruction = inst2AddRec->getStart();
-    const SCEV* baseAddressSecondInstruction = inst1AddRec->getStart();
-    const SCEV* strideStore = inst2AddRec->getStepRecurrence(SE);
-    const SCEV* strideLoad = inst1AddRec->getStepRecurrence(SE);
+    // Recover the base address of the array. Arrays need to be the same.
+    if (SE.getPointerBase(inst1_add_rec) != SE.getPointerBase(inst2_add_rec)) {
+        #ifdef DEBUG
+            outs() << "can't analyze SCEV with different pointer base\n";
+        #endif
+        // in this case no negative distance dependence can be surmised
+        return false;
+    }
+
+    const SCEV* start_first_inst = inst1_add_rec->getStart();
+    const SCEV* start_second_inst = inst2_add_rec->getStart();
+    const SCEV* stride_first_inst = inst1_add_rec->getStepRecurrence(SE);
+    const SCEV* stride_second_inst = inst2_add_rec->getStepRecurrence(SE);
 
     #ifdef DEBUG
-        outs() << "Store start: " << *baseAddressFirstInstruction << "\n";
-        outs() << "Load start: " << *baseAddressSecondInstruction << "\n";
-        outs() << "Store step recurrence: " << *strideStore << "\n";
-        outs() << "Load step recurrence: " << *strideLoad << "\n";
+        outs() << "First instruction start: " << *start_first_inst << "\n";
+        outs() << "Second instruction start: " << *start_second_inst << "\n";
+        outs() << "First instruction step recurrence: " << *stride_first_inst << "\n";
+        outs() << "Second instruction step recurrence: " << *stride_second_inst << "\n";
     #endif
 
-    if (!SE.isKnownNonZero(strideStore) || strideStore != strideLoad){
+    // the two evolutions shall have the same non-null stride
+    if (!SE.isKnownNonZero(stride_first_inst) || stride_first_inst != stride_second_inst){
         outs() << "Cannot compute distance\n";
         return true;
     }
 
     // delta represents the distance, in number of memory cells, between the starting addresses which are used to access memory
     // in instruction 1 and 2
-    const SCEV *instructionsDelta = SE.getMinusSCEV(baseAddressFirstInstruction, baseAddressSecondInstruction);
+    const SCEV *inst_delta = SE.getMinusSCEV(start_first_inst, start_second_inst);
     const SCEV *dependence_dist = nullptr;
     
-    // can we compute distance?
-    if (isa<SCEVConstant>(instructionsDelta) && isa<SCEVConstant>(strideStore)) {
-
+    // check on whether the distance can be computed
+    if (isa<SCEVConstant>(inst_delta) && isa<SCEVConstant>(stride_first_inst)) 
+    {
         // The dependence distance between the two instructions is computed from delta and stride,
         // using a method inspired from strong SIV tests.
         //
@@ -184,36 +188,45 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
         // with a sign that is the result of the sign concordance between stride and delta
       
         #ifdef DEBUG
-            outs() << "Stride: " << *strideStore << ", delta: " << *instructionsDelta << ". Stride type: "<< *strideStore->getType();
+            outs() << "Stride: " << *stride_first_inst << ", delta: " << *inst_delta << ", type: "<< *stride_first_inst->getType() << "\n";
         #endif
         
-        dependence_dist = SE.getMulExpr(instructionsDelta, strideStore);
+        dependence_dist = SE.getMulExpr(inst_delta, stride_first_inst);
         outs() << "Dependence distance: " << *dependence_dist << "\n";
-
     }
-    else{
+    else
+    {
         outs() << "Cannot compute distance\n";
         return true;
     }
-    
 
-    bool isDistLT0 = SE.isKnownPredicate(ICmpInst::ICMP_SLT, dependence_dist, SE.getZero(strideStore->getType()));
+    bool is_dist_LT0 = SE.isKnownPredicate(ICmpInst::ICMP_SLT, dependence_dist, SE.getZero(stride_first_inst->getType()));
     
     #ifdef DEBUG
-        outs() << "Predicate 'dependence dist < 0': " << (isDistLT0 ? "True" : "False") << "\n";
+        outs() << "Predicate 'dependence dist < 0': " << (is_dist_LT0 ? "True" : "False") << "\n";
     #endif
 
-    return isDistLT0;
+    return is_dist_LT0;
 }
 
 
-bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, DependenceInfo &DI, LoopInfo &LI)
+/**
+ * Checks if two loops contain any negative distance dependencies
+ * 
+ * @param loop1 the first loop
+ * @param loop2 the second loop
+ * @param SE the scalar evolution
+ * @param DI the dependency info
+ * @param LI the loop info
+ * @return true if there are negative distance dependencies, false otherwise
+ */
+bool areDistanceIndependent (Loop *loop1, Loop *loop2, ScalarEvolution &SE, DependenceInfo &DI, LoopInfo &LI)
 {
     // get all the loads and stores
-    std::vector<Value*> loadsFirstLoop, storesFirstLoop, loadsSecondLoop, storesSecondLoop;
+    std::vector<Instruction*> loads_first_loop, stores_first_loop, loads_second_loop, stores_second_loop;
 
-    //Lambda function. This collect loads and stores in vectors 
-    auto collectLoadStores = [] (std::vector<Value*> *loads, std::vector<Value*> *stores, Loop *l) {
+    // lambda to collect loads and stores in vectors 
+    auto collectLoadStores = [] (std::vector<Instruction*> *loads, std::vector<Instruction*> *stores, Loop *l) {
         for (auto BI = l->block_begin(); BI != l->block_end(); ++BI) {
             
             BasicBlock *BB = *BI;
@@ -233,53 +246,83 @@ bool areDistanceIndependent (Loop *l1, Loop *l2, ScalarEvolution &SE, Dependence
             }}
     };
     
-    collectLoadStores(&loadsFirstLoop, &storesFirstLoop, l1);
-    collectLoadStores(&loadsSecondLoop, &storesSecondLoop, l2);
+    collectLoadStores(&loads_first_loop, &stores_first_loop, loop1);
+    collectLoadStores(&loads_second_loop, &stores_second_loop, loop2);
 
     #ifdef DEBUG        
-        outs() << "\n Loads dump \n";
-        for(auto i : loadsFirstLoop)   
+        outs() << "\n Loads first loop dump \n";
+        for(auto i : loads_first_loop)   
             outs() << *i << "\n";
-        for(auto i : loadsSecondLoop)   
+
+        outs() << "\n Loads second loop dump \n";
+        for(auto i : loads_second_loop)   
             outs() << *i << "\n";
         
-        outs() << "\n Stores dump \n";    
-        for(auto i : storesFirstLoop)  
+        outs() << "\n Stores first loop dump \n";    
+        for(auto i : stores_first_loop)  
             outs() << *i << "\n";
-        for(auto i : storesSecondLoop)  
+        
+        outs() << "\n Stores second loop dump \n";  
+        for(auto i : stores_second_loop)  
             outs() << *i << "\n";
     #endif
-
-    for (auto store: storesFirstLoop){
-
-        Instruction *storeInst = dyn_cast<Instruction>(store);
-        
-        for (auto load: loadsSecondLoop){
-            
-            Instruction *loadInst = dyn_cast<Instruction>(load);
-            auto instructionDependence = DI.depends(storeInst, loadInst, true);
+    
+    for (auto store: stores_first_loop)
+    {        
+        for (auto load: loads_second_loop)
+        {
+            auto instruction_dependence = DI.depends(store, load, true);
 
             #ifdef DEBUG
-                outs() << "Checking " << *load << " " << *store << " dep? " << (instructionDependence ? "True" : "False") << "\n";
+                outs() << "Checking " << *load << " " << *store << " dep? " << (instruction_dependence ? "True" : "False") << "\n";
             #endif
 
-            if (instructionDependence
-                && !instructionDependence->isInput()
-                && !instructionDependence->isOutput()) {
-                
-                if(LI.getLoopFor(loadInst->getParent()) != l2 || LI.getLoopFor(storeInst->getParent()) != l1){
-                    return false;
-                }
+            if (!instruction_dependence)
+                continue;
 
-                // If isDistanceNegative, then there is a negative distance dependency, so return false
-
-                if (isDistanceNegative(loadInst, storeInst, l2, l1, SE)){
-
-                    return false;
-                }
+            // check that load and store inst are not part of a nested loop
+            if(LI.getLoopFor(load->getParent()) != loop2 || LI.getLoopFor(store->getParent()) != loop1)
+            {
+                #ifdef DEBUG
+                    outs() << "One of the instructions is in a nested loop, can't perform fusion\n";
+                #endif    
+                return false;
             }
+
+            // If isDistanceNegative, then there is a negative distance dependency, so return false
+            if (isDistanceNegative(store, load, loop1, loop2, SE))
+                return false;
         }
     }
+
+    for (auto store: stores_second_loop)
+    {        
+        for (auto load: loads_first_loop)
+        {
+            auto instruction_dependence = DI.depends(store, load, true);
+
+            #ifdef DEBUG
+                outs() << "Checking " << *load << " " << *store << " dep? " << (instruction_dependence ? "True" : "False") << "\n";
+            #endif
+
+            if (!instruction_dependence) 
+                continue;
+
+            // check that load and store inst are not part of a nested loop
+            if(LI.getLoopFor(load->getParent()) != loop1 || LI.getLoopFor(store->getParent()) != loop2)
+            {
+                #ifdef DEBUG
+                    outs() << "One of the instructions is in a nested loop, can't perform fusion\n";
+                #endif    
+                return false;
+            }
+
+            // If isDistanceNegative, then there is a negative distance dependency, so return false
+            if (isDistanceNegative(load, store, loop1, loop2, SE))
+                return false;
+        }
+    }
+
     return true;
 }
 
@@ -357,6 +400,7 @@ void fuseLoop (Loop *l1, Loop *l2)
 
     return;
 }
+
 
 PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
 {   
