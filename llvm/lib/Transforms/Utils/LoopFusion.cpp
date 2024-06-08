@@ -277,7 +277,7 @@ bool areDistanceIndependent (Loop *loop1, Loop *loop2, ScalarEvolution &SE, Depe
                 outs() << "Checking " << *load << " " << *store << " dep? " << (instruction_dependence ? "True" : "False") << "\n";
             #endif
 
-            if (instruction_dependence)
+            if (!instruction_dependence)
                 continue;
 
             // check that load and store inst are not part of a nested loop
