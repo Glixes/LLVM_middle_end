@@ -65,6 +65,17 @@ bool haveSameIterationsNumber (Loop *l1, Loop *l2, ScalarEvolution *SE)
     return getTripCount(l1) == getTripCount(l2);
 }
 
+/** @brief Get the entry block of a loop, if it is guarded it returns the guard block.
+ * 
+ * @param l loop
+ * @return BasicBlock *
+ */
+BasicBlock *getEntryBlock (Loop *l)
+{
+    if (l->isGuarded())
+        return l->getLoopGuardBranch()->getParent();
+    return l->getLoopPreheader();
+}
 
 /** @brief Returns true if the loops are control flow equivalent.
  * I.e. when l1 executes, also l2 executes and when l2 executes also l1 executes.
@@ -78,8 +89,8 @@ bool haveSameIterationsNumber (Loop *l1, Loop *l2, ScalarEvolution *SE)
 */
 bool areFlowEquivalent (Loop *l1, Loop *l2, DominatorTree *DT, PostDominatorTree *PDT)
 {
-    BasicBlock *B1 = l1->getHeader();
-    BasicBlock *B2 = l2->getHeader();
+    BasicBlock *B1 = getEntryBlock(l1);
+    BasicBlock *B2 = getEntryBlock(l2);
     
     return (DT->dominates(B1, B2) && PDT->dominates(B2, B1));
 }
