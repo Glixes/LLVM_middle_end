@@ -362,6 +362,11 @@ void fuseLoop (Loop *l1, Loop *l2)
     */
     PHINode *index1 = l1->getCanonicalInductionVariable();
     PHINode *index2 = l2->getCanonicalInductionVariable();
+    if (!index1 || !index2)
+    {
+        outs() << "Induction variables are not canonical\n";
+        return;
+    }
     index2->replaceAllUsesWith(index1);
 
     /*
@@ -415,6 +420,7 @@ void fuseLoop (Loop *l1, Loop *l2)
 
     delete first_loop; delete second_loop;
 
+    outs() << "Fusion done\n";
     return;
 }
 
@@ -457,7 +463,6 @@ PreservedAnalyses LoopFusion::run (Function &F,FunctionAnalysisManager &AM)
                 outs() << "Starting fusion ...\n";
                 fuseLoop(l1, l2);
                 fusion_happened = true;
-                outs() << "Fusion done\n";
                 break;
             }
         }
