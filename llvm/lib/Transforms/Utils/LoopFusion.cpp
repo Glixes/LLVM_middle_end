@@ -71,6 +71,7 @@ bool haveSameIterationsNumber (Loop *l1, Loop *l2, ScalarEvolution *SE)
     return getTripCount(l1) == getTripCount(l2);
 }
 
+
 /** @brief Get the entry block of a loop, if it is guarded it returns the guard block.
  * 
  * @param l loop
@@ -82,6 +83,7 @@ BasicBlock *getEntryBlock (Loop *l)
         return l->getLoopGuardBranch()->getParent();
     return l->getLoopPreheader();
 }
+
 
 /** @brief Returns true if the loops are control flow equivalent.
  * I.e. when l1 executes, also l2 executes and when l2 executes also l1 executes.
@@ -105,6 +107,9 @@ bool areFlowEquivalent (Loop *l1, Loop *l2, DominatorTree *DT, PostDominatorTree
 /**
  * Check if the distance between the memory accesses of two instructions is negative
  * 
+ * The function can only handle simple subscript in the form [c1 + a*i] and [c2 + a*i],
+ * where i is an induction variable, c1 and c2 are loop invariant,
+ * and a is a constant stride
  * @param inst1 first instruction to analyze
  * @param inst2 second instruction to analyze
  * @param loop1 Loop that contains first instruction
@@ -134,7 +139,7 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
 
         SmallPtrSet<const SCEVPredicate *, 4> preds;
 
-        // create polinomial chain of recurrencies
+        // create polinomial chain of recurrences
         const SCEVAddRecExpr *polynomial_recurrence = SE.convertSCEVToAddRecWithPredicates(
             SCEV_from_instruction, loop_of_the_instruction, preds);       
     
@@ -157,12 +162,12 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
         return true;
     }
 
-    // Recover the base address of the array. Arrays need to be the same.
+    // Recover the base address of the two arrays, since they need to be the same
     if (SE.getPointerBase(inst1_add_rec) != SE.getPointerBase(inst2_add_rec)) {
         #ifdef DEBUG
             outs() << "can't analyze SCEV with different pointer base\n";
         #endif
-        // in this case no negative distance dependence can be surmised
+        // in this case there are no negative distance dependences between the instructions
         return false;
     }
 
@@ -189,26 +194,49 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
     const SCEV *inst_delta = SE.getMinusSCEV(start_first_inst, start_second_inst);
     const SCEV *dependence_dist = nullptr;
     
-    // check on whether the distance can be computed
-    if (isa<SCEVConstant>(inst_delta) && isa<SCEVConstant>(stride_first_inst)) 
+    // check whether the distance can be computed
+    const SCEVConstant *const_delta = dyn_cast<SCEVConstant>(inst_delta);
+    const SCEVConstant *const_stride = dyn_cast<SCEVConstant>(stride_first_inst);
+    if (const_delta && const_stride) 
     {
-        // The dependence distance between the two instructions is computed from delta and stride,
-        // using a method inspired from strong SIV tests.
+        // The dependence distance between the two instructions is computed from the delta and from the stride sign.
         //
-        // The formula to apply should be the following:
-        // d = i' - i = (c1 - c2) / stride, as indicated by Absar in "Scalar Evolution Demystified",
-        // but it was decided to skip the division for implementation difficulties,
-        // it was used a multiplication instead, so that the "distance" would keep into consideration sign difference
-        // between delta and stride;
-        // this way, the distance is not actually a distance between indexes in access to memory (e.g. A[i] compared to A[i']),
-        // but it is just the delta between starting addresses of the two arrays, but inflated by the absolute value of the stride,
-        // with a sign that is the result of the sign concordance between stride and delta
+        // Given two accesses to array A in two different positions i and i',
+        // the formula to calculate the distance between the indexes is the following:
+        // d = i' - i = (c1 - c2) / stride
+        // since here there is only interest in the sign of the distance, the division by the stride has been skipped:
+        // only the sign of the stride has been taken into consideration thanks to a flag.
       
         #ifdef DEBUG
-            outs() << "Stride: " << *stride_first_inst << ", delta: " << *inst_delta << ", type: "<< *stride_first_inst->getType() << "\n";
+            outs() << "SCEVs: stride = " << *stride_first_inst << ", delta = " << *inst_delta << "\n";
+            outs() << "Consts: stride = " << *const_stride << ", delta = " << *const_delta << "\n";
         #endif
-        
-        dependence_dist = SE.getMulExpr(inst_delta, stride_first_inst);
+
+        APInt int_stride = const_stride->getAPInt();
+        APInt int_delta = const_delta->getAPInt();
+        unsigned n_bits = int_stride.getBitWidth();
+        APInt int_zero = APInt(n_bits, 0);
+
+        #ifdef DEBUG
+            outs() << "Int stride: " << int_stride << ", int delta: " << int_delta << "\n";
+        #endif
+
+        // in case of stride 0, no distance can be calculted
+        // constant access to an array position is considered as a dependency incompatible with loop fusion
+        if (int_stride.eq(int_zero))
+            return true;
+        // if the delta is not a multiplier of the stride, then dependencies could arise
+        if ((int_delta.ne(int_zero) && int_delta.urem(int_stride).ne(int_zero)))
+            return true;
+
+        // if stride < 0, reverse the delta to obtain the distance
+        bool reverse_delta = false;
+        if (int_stride.sgt(int_zero))
+            reverse_delta = true;
+        if (reverse_delta)
+            dependence_dist = SE.getNegativeSCEV(inst_delta);
+        else
+            dependence_dist = inst_delta;
         outs() << "Dependence distance: " << *dependence_dist << "\n";
     }
     else
