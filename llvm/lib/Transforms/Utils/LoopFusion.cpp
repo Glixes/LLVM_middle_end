@@ -134,7 +134,6 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
         
         return polynomial_recurrence;
 
-
     };
 
     const SCEVAddRecExpr *inst1_add_rec = getSCEVAddRec(inst1, loop1); 
@@ -147,6 +146,7 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
         return true;
     }
 
+    // Recover the base address of the array. We have to check the arrays we are analysing are the same (otherwise, there is no dependence)
     if (SE.getPointerBase(inst1_add_rec) != SE.getPointerBase(inst2_add_rec)) {
         #ifdef DEBUG
             outs() << "can't analyze SCEV with different pointer base\n";
@@ -230,10 +230,10 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
 bool areDistanceIndependent (Loop *loop1, Loop *loop2, ScalarEvolution &SE, DependenceInfo &DI, LoopInfo &LI)
 {
     // get all the loads and stores
-    std::vector<Value*> loads_first_loop, stores_first_loop, loads_second_loop, stores_second_loop;
+    std::vector<Instruction*> loads_first_loop, stores_first_loop, loads_second_loop, stores_second_loop;
 
     // lambda to collect loads and stores in vectors 
-    auto collectLoadStores = [] (std::vector<Value*> *loads, std::vector<Value*> *stores, Loop *l) {
+    auto collectLoadStores = [] (std::vector<Instruction*> *loads, std::vector<Instruction*> *stores, Loop *l) {
         for (auto BI = l->block_begin(); BI != l->block_end(); ++BI) {
             
             BasicBlock *BB = *BI;
@@ -308,10 +308,38 @@ bool areDistanceIndependent (Loop *loop1, Loop *loop2, ScalarEvolution &SE, Depe
         return true;
     };
     
-    if (!checkStoreAndLoadDependence(&stores_first_loop, &loads_second_loop, loop1, loop2) || 
+    for (auto store: stores_first_loop){        
+            for (auto load: loads_second_loop){
+
+                auto instruction_dependence = DI.depends(stores_first_loop, loads_second_loop, true);
+
+                #ifdef DEBUG
+                    outs() << "Checking " << *load << " " << *store << " dep? " << (instruction_dependence ? "True" : "False") << "\n";
+                #endif
+
+                if (instruction_dependence) {
+                    // check that load and store inst are not part of a nested loop
+                    if(LI.getLoopFor(load_inst->getParent()) != load_loop || LI.getLoopFor(store_inst->getParent()) != store_loop){
+                        #ifdef DEBUG
+                            outs() << "One of the instructions is in a nested loop, can't perform fusion\n";
+                        #endif    
+                        return false;
+                    }
+
+                    // If isDistanceNegative, then there is a negative distance dependency, so return false
+                    if (isDistanceNegative(load_inst, store_inst, load_loop, store_loop, SE))
+                        return false;   
+
+                    #ifdef DEBUG
+                        outs() << "No distance dependencies found between the two instructions\n";
+                    #endif                 
+                }
+            }
+
+/*     if (!checkStoreAndLoadDependence(&stores_first_loop, &loads_second_loop, loop1, loop2) || 
         !checkStoreAndLoadDependence(&stores_second_loop, &loads_first_loop, loop2, loop1) )
         return false;
-
+ */
     return true;
 }
 
