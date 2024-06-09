@@ -9,7 +9,7 @@
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
 
 
-#define DEBUG
+// #define DEBUG
 
 using namespace llvm;
 
@@ -64,7 +64,9 @@ bool haveSameIterationsNumber (Loop *l1, Loop *l2, ScalarEvolution *SE)
             outs() << "Trip count of loop " << l->getName() << " could not be computed.";
             return nullptr;
         }
-        outs() << "Trip count: " << *trip_count << "\n";
+        #ifdef DEBUG
+            outs() << "Trip count: " << *trip_count << "\n";
+        #endif
         return trip_count;
     };
 
@@ -156,17 +158,13 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
     const SCEVAddRecExpr *inst2_add_rec = getSCEVAddRec(inst2, loop2);
     
     if (!(inst1_add_rec && inst2_add_rec)){
-        #ifdef DEBUG
-            outs() << "Can't find a polynomial recurrence for inst!\n";
-        #endif
+        outs() << "Can't find a polynomial recurrence for inst!\n";
         return true;
     }
 
     // Recover the base address of the two arrays, since they need to be the same
     if (SE.getPointerBase(inst1_add_rec) != SE.getPointerBase(inst2_add_rec)) {
-        #ifdef DEBUG
-            outs() << "can't analyze SCEV with different pointer base\n";
-        #endif
+        outs() << "can't analyze SCEV with different pointer base\n";
         // in this case there are no negative distance dependences between the instructions
         return false;
     }
@@ -223,21 +221,22 @@ bool isDistanceNegative (Instruction *inst1, Instruction *inst2, Loop *loop1, Lo
 
         // in case of stride 0, no distance can be calculted
         // constant access to an array position is considered as a dependency incompatible with loop fusion
-        if (int_stride.eq(int_zero))
+        if (int_stride == 0)
             return true;
-        // if the delta is not a multiplier of the stride, then dependencies could arise
-        if ((int_delta.ne(int_zero) && int_delta.urem(int_stride).ne(int_zero)))
-            return true;
+        // if the delta is not a multiplier of the stride, then there are no dependencies
+        if ((int_delta != 0 && int_delta.abs().urem(int_stride.abs()) != 0))
+            return false;
 
         // if stride < 0, reverse the delta to obtain the distance
         bool reverse_delta = false;
-        if (int_stride.sgt(int_zero))
+        if (int_stride.slt(int_zero))
             reverse_delta = true;
-        if (reverse_delta)
-            dependence_dist = SE.getNegativeSCEV(inst_delta);
-        else
-            dependence_dist = inst_delta;
-        outs() << "Dependence distance: " << *dependence_dist << "\n";
+
+        dependence_dist = reverse_delta ? SE.getNegativeSCEV(inst_delta) : inst_delta;
+
+        #ifdef DEBUG
+            outs() << "Dependence distance: " << *dependence_dist << "\n";
+        #endif
     }
     else
     {
@@ -328,9 +327,7 @@ bool areDistanceIndependent (Loop *loop1, Loop *loop2, ScalarEvolution &SE, Depe
             // check that load and store inst are not part of a nested loop
             if(LI.getLoopFor(load->getParent()) != loop2 || LI.getLoopFor(store->getParent()) != loop1)
             {
-                #ifdef DEBUG
-                    outs() << "One of the instructions is in a nested loop, can't perform fusion\n";
-                #endif    
+                outs() << "One of the instructions is in a nested loop, can't perform fusion\n";
                 return false;
             }
 
@@ -356,9 +353,7 @@ bool areDistanceIndependent (Loop *loop1, Loop *loop2, ScalarEvolution &SE, Depe
             // check that load and store inst are not part of a nested loop
             if(LI.getLoopFor(load->getParent()) != loop1 || LI.getLoopFor(store->getParent()) != loop2)
             {
-                #ifdef DEBUG
-                    outs() << "One of the instructions is in a nested loop, can't perform fusion\n";
-                #endif    
+                outs() << "One of the instructions is in a nested loop, can't perform fusion\n";
                 return false;
             }
 
